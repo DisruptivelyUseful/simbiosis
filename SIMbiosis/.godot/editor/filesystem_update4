@@ -1,0 +1,14 @@
+res://default_env.tres
+res://day_night_cycle/day_night_cycle.tscn
+res://numberscript.gd
+res://day_night_cycle/day_night_cycle.gd
+res://Main.tscn
+res://TrashPrinter.tscn
+res://SimpleGraphNode.tscn
+res://Shredder.tscn
+res://SolarPanels.tscn
+res://Number.tscn
+res://Container.tscn
+res://node_2d.tscn
+res://draw_circle.tscn
+res://debug_overlay.gd
