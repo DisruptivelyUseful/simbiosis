@@ -1,0 +1,2850 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Node-Based System Simulator - Advanced Batching</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        /* CSS same as "Refinements" version */
+        body { font-family: Arial, sans-serif; background-color: #2d2d2d; color: #e8e8e8; margin: 0; padding: 0; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
+        .toolbar { background-color: #3a3a3a; padding: 10px 15px; display: flex; gap: 8px; align-items: center; border-bottom: 1px solid #555; flex-shrink: 0; }
+        .toolbar button { padding: 7px 12px; background-color: #555; color: #fff; border: 1px solid #777; border-radius: 4px; cursor: pointer; font-size: 0.9em; }
+        .toolbar button:hover { background-color: #6a6a6a; }
+        .toolbar .time-display { margin-left: auto; font-size: 1.1em; padding-right: 15px; color: #ddd; }
+        .toolbar .play-controls { display: flex; align-items: center; gap: 10px; margin-left:15px;}
+        .toolbar .play-controls button#playPauseButton { font-size: 1.2em; padding: 5px 10px; }
+        .toolbar input[type="range"] { width: 100px; cursor: pointer; margin:0;}
+        .toolbar .speed-label { font-size: 0.9em; color: #bbb; margin-left: 5px;}
+        #main-content { display: flex; flex-grow: 1; overflow: hidden; }
+        #canvas-container { 
+            flex-grow: 1; 
+            position: relative; 
+            overflow: hidden;
+            transition: background-color 1s ease-in-out;
+        }
+        svg { 
+            width: 100%; 
+            height: 100%; 
+            background-color: #1a2b3c; 
+            background-image: 
+                linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), 
+                linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px); 
+            background-size: 35px 35px; 
+            position: relative;
+            transition: background-color 1s ease-in-out;
+        }
+        .node { cursor: grab; filter: drop-shadow(1px 1px 2px rgba(0,0,0,0.4)); }
+        .node-rect { stroke: #666; stroke-width: 1.5px; rx: 8px; ry: 8px; fill: #444; transition: stroke 0.2s ease-out, stroke-width 0.2s ease-out; }
+        .node.selected .node-rect { stroke: #ffdd57; stroke-width: 2.5px; } 
+        .node.processor.is-running .node-rect, .node.solar-array.is-running .node-rect { stroke: #5cb85c; stroke-width: 2.5px; }
+        .node.processor.is-stalled .node-rect { stroke: #d9534f; stroke-width: 2.5px;}
+        .node.processor.is-awaiting-batch .node-rect { stroke: #f0ad4e; stroke-width: 2.5px; }
+        .node-title { fill: #ffffff; font-size: 14px; font-weight: bold; text-anchor: middle; pointer-events: none; text-transform: uppercase; paint-order: stroke; stroke: #000000; stroke-width: 2px; stroke-linecap: round; stroke-linejoin: round; }
+        .node-img { pointer-events: none; object-fit: contain; opacity: 0.9; }
+        .node-extra-text { fill: #b0b0b0; font-size: 11px; text-anchor: middle; pointer-events: none; }
+        .resource-display .node-value { fill: #ffffff; font-size: 28px; font-weight: bold; text-anchor: middle; pointer-events: none; }
+        .resource-display .node-unit { fill: #c0c0c0; font-size: 12px; text-anchor: middle; pointer-events: none; }
+        .resource-display .node-img { opacity: 0.85; }
+        .resource-display .capacity-bar-bg { fill: #303030; }
+        .resource-display .capacity-bar-fill { fill: #6fa06c; transition: height 0.3s ease-out, y 0.3s ease-out; }
+        .processor .node-img { opacity: 0.95; }
+        .processor .io-area { pointer-events: none; } 
+        .processor .port-text-label { fill: #d0d0d0; font-size: 11px; pointer-events: none; }
+        .processor .port-text-label.input { text-anchor: start; }
+        .processor .port-text-label.output { text-anchor: end; }
+        .processor .node-action-button rect { fill: #555; stroke: #777; rx: 4; ry: 4; cursor: pointer; }
+        .processor .node-action-button rect:hover { fill: #6a6a6a; }
+        .processor .node-action-button text { fill: #fff; font-size: 12px; text-anchor: middle; pointer-events: none; }
+        .port-handle { 
+            stroke: #888; 
+            stroke-width: 2px; 
+            cursor: pointer; 
+            r: 12px;
+            touch-action: none;
+            -webkit-tap-highlight-color: transparent;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        .port-handle.input { fill: #70a0d0; } 
+        .port-handle.output { fill: #70c070; }
+        .port-handle:hover { 
+            r: 14px;
+            filter: brightness(1.25); 
+        }
+        .port-handle:active {
+            r: 14px;
+            filter: brightness(1.5);
+        }
+        .connection { stroke-width: 4.5px; fill:none; pointer-events:none; } 
+        .connection.is-flowing { stroke-dasharray: 10, 5; animation: flow 1s linear infinite; }
+        @keyframes flow { to { stroke-dashoffset: -15; } }
+        .connection.power { stroke: #e080e0; } .connection.plastic { stroke: #efdc70; } 
+        .connection.plastic-flakes { stroke: #80b0e0; } .connection.wind-turbines { stroke: #80d080; }
+        .connection.biomass { stroke: #8B4513; } .connection.poop-gas { stroke: #FFDEAD; } .connection.biochar { stroke: #404040; }
+        .temp-connection { stroke: #ffdd57; stroke-width: 3px; stroke-dasharray: 5,5; fill: none; }
+        .close-button { cursor: pointer; fill: #aaa; font-size:14px; font-weight:bold; text-anchor: middle;}
+        .close-button:hover { fill: #fff; }
+        #sidebar { 
+            width: 300px;
+            background-color: #3a3a3a;
+            padding: 15px;
+            padding-bottom: 80px; /* Add padding to prevent overlap with the button */
+            box-sizing: border-box;
+            overflow-y: auto;
+            border-left: 1px solid #555;
+            color: #e8e8e8;
+            display: none;
+            position: fixed;
+            right: 0;
+            top: 50px;
+            bottom: 0;
+            z-index: 1000;
+        }
+        #sidebar.visible {
+            display: block;
+        }
+        #sidebar h3,#sidebar h4{margin-top:0;margin-bottom:10px;color:#fff;} #sidebar div>label,#sidebar label{margin-bottom:8px;display:block;font-size:0.95em;} #sidebar input[type="text"],#sidebar input[type="number"],#sidebar select, #sidebar input[type="checkbox"]{width:calc(100% - 12px);padding:7px;background-color:#4a4a4a;color:#fff;border:1px solid #666;border-radius:3px;box-sizing:border-box;margin-top:4px;}
+        #sidebar input[type="checkbox"] { width: auto; margin-right: 5px; vertical-align: middle;}
+        #sidebar button{padding:8px 12px;background-color:#555;color:#fff;border:1px solid #777;border-radius:4px;cursor:pointer;margin-top:5px;width:100%;box-sizing:border-box;} #sidebar button:hover{background-color:#6a6a6a;} #sidebar .sidebar-section button{width:auto;padding:3px 6px;float:right;font-size:1.1em;} .io-item{border:1px solid #505050;padding:10px;margin-bottom:10px;border-radius:4px;background-color:#424242;} .io-item label{margin-bottom:4px;font-size:0.9em;} .io-item input,.io-item select{width:calc(100% - 10px);} .hidden{display:none!important;}
+        .batch-duration-field { margin-top: 10px; }
+        .connection {
+            transform-origin: 0 0;
+            vector-effect: non-scaling-stroke;
+        }
+        .connection {
+            vector-effect: non-scaling-stroke;
+            stroke-width: 4.5px;
+            fill: none;
+            pointer-events: none;
+        }
+        .temp-connection {
+            vector-effect: non-scaling-stroke;
+            stroke: #ffdd57;
+            stroke-width: 3px;
+            stroke-dasharray: 5,5;
+            fill: none;
+        }
+        #module-library { 
+            width: 250px; 
+            background-color: #3a3a3a; 
+            border-left: 1px solid #555; 
+            overflow-y: auto; 
+            padding: 15px;
+            padding-bottom: 80px; /* Add padding to prevent overlap with the button */
+            flex-shrink: 0;
+        }
+        #module-library h3 { margin-top: 0; margin-bottom: 15px; color: #fff; }
+        .module-category { margin-bottom: 20px; }
+        .module-category h4 { color: #ddd; margin-bottom: 10px; font-size: 0.9em; text-transform: uppercase; }
+        .module-button { 
+            display: block;
+            width: 100%;
+            padding: 8px 12px;
+            margin-bottom: 8px;
+            background-color: #444;
+            color: #fff;
+            border: 1px solid #555;
+            border-radius: 4px;
+            cursor: pointer;
+            text-align: left;
+            transition: background-color 0.2s;
+        }
+        .module-button:hover { background-color: #555; }
+        .module-button img { 
+            width: 20px;
+            height: 20px;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        #custom-node-builder-button {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            background-color: #4a4a4a;
+            color: #fff;
+            border: 1px solid #666;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1em;
+            z-index: 1000;
+            transition: background-color 0.2s;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        #custom-node-builder-button:hover {
+            background-color: #5a5a5a;
+        }
+        #custom-node-builder-button.back-to-library {
+            background-color: #4a6a4a;
+        }
+        #custom-node-builder-button.back-to-library:hover {
+            background-color: #5a7a5a;
+        }
+        .connection.default-connection {
+            stroke: #808080;
+        }
+        .temp-connection {
+            stroke: #ffdd57;
+            stroke-width: 3px;
+            stroke-dasharray: 5,5;
+            fill: none;
+            pointer-events: none;
+            vector-effect: non-scaling-stroke;
+        }
+        .temp-connection-group {
+            pointer-events: none;
+        }
+        .temp-connection {
+            stroke: #ffdd57;
+            stroke-width: 3px;
+            stroke-dasharray: 5,5;
+            fill: none;
+            vector-effect: non-scaling-stroke;
+        }
+        .solar-array .port-text-label { fill: #d0d0d0; font-size: 11px; pointer-events: none; }
+        .solar-array .port-text-label.input { text-anchor: start; }
+        .solar-array .port-text-label.output { text-anchor: end; }
+        .solar-array .power-bar-bg { fill: #303030; }
+        .solar-array .power-bar-fill { fill: #ffdd57; transition: height 0.3s ease-out, y 0.3s ease-out; }
+        /* Add these styles in the existing <style> section */
+        .popup-menu {
+            position: fixed;
+            background-color: #3a3a3a;
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 8px 0;
+            min-width: 200px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+            z-index: 1000;
+        }
+        .popup-menu-item {
+            padding: 8px 15px;
+            color: #fff;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .popup-menu-item:hover {
+            background-color: #4a4a4a;
+        }
+        .popup-menu-separator {
+            height: 1px;
+            background-color: #555;
+            margin: 4px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="toolbar"> 
+        <div class="play-controls"> 
+            <button id="playPauseButton">&#9658;</button> 
+            <input type="range" id="speedSlider" min="100" max="10000" value="1000"> 
+            <span class="speed-label">1.0x</span> 
+        </div> 
+        <div class="time-display">0 hours (Day 1, 00:00)</div>
+        <button id="saveSystem" style="margin-left: 15px;">Save System</button>
+        <button id="loadSystem">Load System</button>
+        <div class="zoom-controls" style="margin-left: 15px;">
+            <button id="zoomIn" style="padding: 5px 10px;">+</button>
+            <button id="zoomOut" style="padding: 5px 10px;">-</button>
+            <button id="resetZoom" style="padding: 5px 10px;">Reset</button>
+        </div>
+        <div class="cost-display" style="margin-left: 15px; color: #ddd;">
+            Total Cost: $<span id="totalCost">0</span>
+        </div>
+    </div>
+    <div id="main-content">
+        <div id="canvas-container">
+            <svg id="simulationCanvas"></svg>
+        </div>
+        <div id="module-library">
+            <h3>Module Library</h3>
+            <div class="module-category">
+                <h4>Power Generation</h4>
+                <button class="module-button" id="addSolarArray">Solar Array</button>
+                <button class="module-button" id="addWindTurbines">Wind Turbines</button>
+            </div>
+            <div class="module-category">
+                <h4>Storage</h4>
+                <button class="module-button" id="addBatteryBank">Battery Bank</button>
+            </div>
+            <div class="module-category">
+                <h4>Resources</h4>
+                <button class="module-button" id="addPlasticTrash">Plastic Trash</button>
+                <button class="module-button" id="addPlasticFlakes">Plastic Flakes</button>
+                <button class="module-button" id="addBiomass">Biomass</button>
+                <button class="module-button" id="addPoopGas">Poop-Gas</button>
+                <button class="module-button" id="addBiochar">Biochar</button>
+            </div>
+            <div class="module-category">
+                <h4>Processors</h4>
+                <button class="module-button" id="addShredder">Shredder</button>
+                <button class="module-button" id="addTrashPrinter">Trash Printer</button>
+                <button class="module-button" id="addBiocharReactor">Biochar Reactor</button>
+            </div>
+        </div>
+    </div>
+    <div id="sidebar">
+        <div id="nodeBuilderSection">
+            <h3>Custom Node Builder</h3>
+            <div><label>Node Name: <input type="text" id="customNodeName" placeholder="e.g., My Assembler"></label></div>
+            <div><label>Image URL: <input type="text" id="customNodeImageURL" placeholder="https://.../icon.png"></label></div>
+            <div><label>Cost ($): <input type="number" id="customNodeCost" min="0" step="1" value="0"></label></div>
+            <div class="batch-duration-field"><label>Batch Duration (hrs, if batch proc.): <input type="number" id="customBatchDuration" value="6" min="1"></label></div>
+            <h4 class="sidebar-section">Inputs <button id="addCustomInput">+</button></h4>
+            <div id="customInputsContainer"></div>
+            <h4 class="sidebar-section">Outputs <button id="addCustomOutput">+</button></h4>
+            <div id="customOutputsContainer"></div>
+            <button id="createCustomNodeInstance">Create Instance</button>
+        </div>
+        <div id="nodeInspectorSection" class="hidden">
+            <h3>Edit Node Properties</h3>
+            <div><label>Node Name: <input type="text" id="inspectorNodeName"></label></div>
+            <div><label>Image URL: <input type="text" id="inspectorNodeImageURL" placeholder="https://.../icon.png"></label></div>
+            <div><label>Cost ($): <input type="number" id="inspectorNodeCost" min="0" step="1"></label></div>
+            <div id="inspectorBatchDurationField" class="batch-duration-field hidden"><label>Batch Duration (hrs): <input type="number" id="inspectorBatchDuration" min="1"></label></div>
+            <div id="inspectorProcessorFields" class="hidden">
+                <h4 class="sidebar-section">Inputs <button id="inspectorAddInput">+</button></h4>
+                <div id="inspectorInputsContainer"></div>
+                <h4 class="sidebar-section">Outputs <button id="inspectorAddOutput">+</button></h4>
+                <div id="inspectorOutputsContainer"></div>
+            </div>
+            <div id="inspectorSolarArrayFields" class="hidden">
+                <div><label>Rated Output (kW): <input type="number" id="inspectorRatedOutput" step="0.1" value="5"></label></div>
+                <div><span>Current Output: </span><span id="inspectorCurrentOutput">0.0 kW</span></div>
+            </div>
+            <div id="inspectorResourceDisplayFields" class="hidden">
+                <div><label>Unit: <input type="text" id="inspectorNodeUnit" placeholder="e.g., kg, kWh"></label></div>
+                <div><label>Passive Rate (/hr): <input type="number" id="inspectorPassiveRate" step="0.1" placeholder="e.g., 5 or -2"></label></div>
+                <div><label>Max Capacity (optional): <input type="number" id="inspectorMaxCapacity" step="1" placeholder="e.g., 100"></label></div>
+                <div><label>Progress Bar Color: <input type="color" id="inspectorProgressColor" value="#6fa06c"></label></div>
+                <div><label><input type="checkbox" id="inspectorIsExternal"> Is External Source (can go negative)</label></div>
+            </div>
+            <button id="saveNodeChanges">Apply Changes</button>
+            <button id="cancelNodeChanges" style="background-color:#5a5a5a;">Done / Deselect</button>
+        </div>
+    </div>
+    <button id="custom-node-builder-button">Create Custom Module</button>
+
+    <script>
+        // ... (Initial consts, global vars same as before) ...
+        const svg = d3.select("#simulationCanvas");
+        let svgWidth, svgHeight;
+        let currentZoom = d3.zoomIdentity;
+        let isPanning = false;
+        let lastPanPoint = null;
+
+        const updateSvgDimensions = () => { 
+            svgWidth = svg.node().getBoundingClientRect().width; 
+            svgHeight = svg.node().getBoundingClientRect().height; 
+        };
+
+        // Fix zoom behavior
+        const zoom = d3.zoom()
+            .scaleExtent([0.1, 4])
+            .on("zoom", (event) => {
+                currentZoom = event.transform;
+                zoomGroup.attr("transform", `translate(${event.transform.x},${event.transform.y}) scale(${event.transform.k})`);
+            })
+            .filter(event => {
+                // Allow zoom on mouse wheel and touch gestures
+                return event.type === 'wheel' || event.type === 'touchstart' || event.type === 'touchmove';
+            });
+
+        // Create a group for all content that should be zoomed
+        const zoomGroup = svg.append("g")
+            .attr("class", "zoom-group");
+
+        // Apply zoom behavior to SVG
+        svg.call(zoom);
+
+        // Add CSS to prevent default touch behavior
+        svg.style("touch-action", "none");
+
+        // Handle touch events for two-finger pan
+        let lastTouchDistance = null;
+        let lastTouchCenter = null;
+
+        svg.on("touchstart", (event) => {
+            if (event.touches.length === 2) {
+                event.preventDefault();
+                const touch1 = event.touches[0];
+                const touch2 = event.touches[1];
+                
+                // Calculate initial touch distance and center
+                lastTouchDistance = Math.hypot(
+                    touch2.clientX - touch1.clientX,
+                    touch2.clientY - touch1.clientY
+                );
+                lastTouchCenter = {
+                    x: (touch1.clientX + touch2.clientX) / 2,
+                    y: (touch1.clientY + touch2.clientY) / 2
+                };
+            }
+        });
+
+        svg.on("touchmove", (event) => {
+            if (event.touches.length === 2) {
+                event.preventDefault();
+                const touch1 = event.touches[0];
+                const touch2 = event.touches[1];
+                
+                // Calculate current touch distance and center
+                const currentTouchDistance = Math.hypot(
+                    touch2.clientX - touch1.clientX,
+                    touch2.clientY - touch1.clientY
+                );
+                const currentTouchCenter = {
+                    x: (touch1.clientX + touch2.clientX) / 2,
+                    y: (touch1.clientY + touch2.clientY) / 2
+                };
+
+                if (lastTouchDistance && lastTouchCenter) {
+                    // Calculate zoom factor based on touch distance change
+                    const scale = currentTouchDistance / lastTouchDistance;
+                    
+                    // Calculate pan offset
+                    const dx = currentTouchCenter.x - lastTouchCenter.x;
+                    const dy = currentTouchCenter.y - lastTouchCenter.y;
+                    
+                    // Apply zoom and pan
+                    const newScale = currentZoom.k * scale;
+                    if (newScale >= 0.1 && newScale <= 4) {
+                        currentZoom = currentZoom
+                            .translate(dx / currentZoom.k, dy / currentZoom.k)
+                            .scale(newScale);
+                        svg.call(zoom.transform, currentZoom);
+                    }
+                }
+                
+                // Update last touch values
+                lastTouchDistance = currentTouchDistance;
+                lastTouchCenter = currentTouchCenter;
+            }
+        });
+
+        svg.on("touchend", () => {
+            lastTouchDistance = null;
+            lastTouchCenter = null;
+        });
+
+        // Remove right-click pan behavior
+        svg.on("contextmenu", (event) => {
+            event.preventDefault();
+        });
+
+        // Add left-click pan behavior
+        svg.on("mousedown", (event) => {
+            if (event.button === 0) { // Left mouse button
+                isPanning = true;
+                lastPanPoint = d3.pointer(event);
+            }
+        });
+
+        svg.on("mousemove", (event) => {
+            if (isPanning && lastPanPoint) {
+                const currentPoint = d3.pointer(event);
+                const dx = currentPoint[0] - lastPanPoint[0];
+                const dy = currentPoint[1] - lastPanPoint[1];
+                
+                currentZoom = currentZoom.translate(dx / currentZoom.k, dy / currentZoom.k);
+                svg.call(zoom.transform, currentZoom);
+                
+                lastPanPoint = currentPoint;
+            }
+        });
+
+        svg.on("mouseup", (event) => {
+            if (event.button === 0) { // Left mouse button
+                isPanning = false;
+                lastPanPoint = null;
+            }
+        });
+
+        svg.on("mouseleave", () => {
+            isPanning = false;
+            lastPanPoint = null;
+        });
+
+        // Add coordinate transformation utilities
+        function screenToWorld(x, y) {
+            return {
+                x: (x - currentZoom.x) / currentZoom.k,
+                y: (y - currentZoom.y) / currentZoom.k
+            };
+        }
+
+        function worldToScreen(x, y) {
+            return {
+                x: x * currentZoom.k + currentZoom.x,
+                y: y * currentZoom.k + currentZoom.y
+            };
+        }
+
+        // Modified getAbsPortPosition function to work with zoom
+        function getAbsPortPosition(node, port) {
+            // Calculate position in world coordinates
+            let worldX = node.x;
+            let worldY = node.y + node.height * (port.yOffsetRatio || 0.5);
+            
+            if (port.side === 'right') {
+                worldX += node.width;
+            }
+            
+            // Convert to screen coordinates
+            return worldToScreen(worldX, worldY);
+        }
+
+        // Modified drag behavior to work with zoom
+        function dragStarted(e, d) {
+            if (e.button !== 0) return; // Only handle left-click drag
+            d3.select(this).raise().classed("active", true);
+            const worldPos = screenToWorld(e.x, e.y);
+            dragOffsetX = worldPos.x - d.x;
+            dragOffsetY = worldPos.y - d.y;
+        }
+
+        function dragged(e, d) {
+            if (e.button !== 0) return; // Only handle left-click drag
+            const worldPos = screenToWorld(e.x, e.y);
+            d.x = worldPos.x - dragOffsetX;
+            d.y = worldPos.y - dragOffsetY;
+            render();
+        }
+
+        // Add these utility functions at the top level
+        function getMousePosition(event) {
+            const transform = d3.zoomTransform(svg.node());
+            let x, y;
+            
+            if (event.type.startsWith('touch')) {
+                const touch = event.touches ? event.touches[0] : event;
+                const rect = svg.node().getBoundingClientRect();
+                x = touch.clientX - rect.left;
+                y = touch.clientY - rect.top;
+            } else {
+                [x, y] = d3.pointer(event, svg.node());
+            }
+            
+            return {
+                x: (x - transform.x) / transform.k,
+                y: (y - transform.y) / transform.k
+            };
+        }
+
+        function createBezierPath(start, end, startSide, endSide) {
+            const dx = end.x - start.x;
+            const offset = Math.max(50, Math.abs(dx) * 0.3);
+            
+            const path = d3.path();
+            path.moveTo(start.x, start.y);
+            path.bezierCurveTo(
+                start.x + (startSide === 'right' ? offset : -offset),
+                start.y,
+                end.x + (endSide === 'left' ? -offset : offset),
+                end.y,
+                end.x,
+                end.y
+            );
+            return path.toString();
+        }
+
+        // Replace the startConnection function with this new implementation
+        function startConnection(event, nodeId, portId) {
+            // Handle both mouse and touch events
+            if (event.type === 'mousedown' && event.button !== 0) return; // Only handle left-click for mouse
+            event.preventDefault(); // Prevent default for both mouse and touch
+            event.stopPropagation();
+            
+            const sourceNode = findNodeById(nodeId);
+            const sourcePort = sourceNode.ports.find(p => p.id === portId);
+            if (!sourcePort) return; // Add safety check
+            
+            tempConnectionData = {
+                sourceNodeId: nodeId,
+                sourcePortId: portId,
+                sourcePort: sourcePort,
+                sourceNode: sourceNode
+            };
+
+            // Create temporary connection group
+            const tempConnectionGroup = zoomGroup.append("g")
+                .attr("class", "temp-connection-group");
+
+            // Add the path element
+            const tempConnection = tempConnectionGroup.append("path")
+                .attr("class", "temp-connection")
+                .style("vector-effect", "non-scaling-stroke");
+
+            function updateConnection(event) {
+                // Get coordinates based on event type
+                let mousePos;
+                if (event.type.startsWith('touch')) {
+                    const touch = event.touches[0];
+                    const rect = svg.node().getBoundingClientRect();
+                    mousePos = {
+                        x: (touch.clientX - rect.left - currentZoom.x) / currentZoom.k,
+                        y: (touch.clientY - rect.top - currentZoom.y) / currentZoom.k
+                    };
+                } else {
+                    mousePos = getMousePosition(event);
+                }
+                
+                const sourcePos = getAbsPortPosition(sourceNode, sourcePort);
+                
+                // Update the path
+                tempConnection.attr("d", createBezierPath(
+                    sourcePos,
+                    mousePos,
+                    sourcePort.side,
+                    mousePos.x > sourcePos.x ? 'left' : 'right'
+                ));
+            }
+
+            // Initial position
+            updateConnection(event);
+
+            // Add event listeners for both mouse and touch
+            svg.on("mousemove.connection touchmove.connection", updateConnection);
+            
+            function endConnection(e) {
+                // Clean up event listeners
+                svg.on("mousemove.connection touchmove.connection", null)
+                   .on("mouseup.connection touchend.connection", null);
+                
+                // Remove temporary connection
+                tempConnectionGroup.remove();
+                
+                // Get the target position based on event type
+                let targetPos;
+                if (e.type.startsWith('touch')) {
+                    const touch = e.changedTouches[0];
+                    const rect = svg.node().getBoundingClientRect();
+                    targetPos = {
+                        x: (touch.clientX - rect.left - currentZoom.x) / currentZoom.k,
+                        y: (touch.clientY - rect.top - currentZoom.y) / currentZoom.k
+                    };
+                } else {
+                    targetPos = getMousePosition(e);
+                }
+
+                // Find the closest node within a reasonable distance
+                let closestNode = null;
+                let closestDistance = Infinity;
+                let closestPort = null;
+
+                // Check all nodes for a valid target port
+                nodes.forEach(node => {
+                    node.ports.forEach(port => {
+                        // Allow connections between compatible ports
+                        if ((port.type === 'input' && sourcePort.type === 'output') || 
+                            (port.type === 'output' && sourcePort.type === 'input')) {
+                            if (port.resourceType === sourcePort.resourceType || 
+                                port.resourceType === RESOURCE_TYPES.CUSTOM ||
+                                sourcePort.resourceType === RESOURCE_TYPES.CUSTOM) {
+                                const portPos = getAbsPortPosition(node, port);
+                                const distance = Math.sqrt(
+                                    Math.pow(portPos.x - targetPos.x, 2) + 
+                                    Math.pow(portPos.y - targetPos.y, 2)
+                                );
+                                if (distance < closestDistance && distance < 50) {
+                                    closestNode = node;
+                                    closestPort = port;
+                                    closestDistance = distance;
+                                }
+                            }
+                        }
+                    });
+                });
+
+                // If we found a valid target node with a compatible port
+                if (closestNode && closestPort) {
+                    // Create new connection
+                    connectionIdCounter++;
+                    connections.push({
+                        id: `conn-${connectionIdCounter}`,
+                        sourceNodeId: sourcePort.type === 'output' ? sourceNode.id : closestNode.id,
+                        sourcePortId: sourcePort.type === 'output' ? sourcePort.id : closestPort.id,
+                        targetNodeId: sourcePort.type === 'output' ? closestNode.id : sourceNode.id,
+                        targetPortId: sourcePort.type === 'output' ? closestPort.id : sourcePort.id
+                    });
+                } else if (sourcePort.type === 'output') {
+                    // If dropping an output port and no valid target found, show the module creation menu
+                    // Convert world coordinates back to screen coordinates for the menu position
+                    const screenPos = worldToScreen(targetPos.x, targetPos.y);
+                    const menuEvent = {
+                        clientX: screenPos.x,
+                        clientY: screenPos.y,
+                        preventDefault: () => {},
+                        stopPropagation: () => {}
+                    };
+                    showModuleCreationMenu(menuEvent, sourcePort);
+                } else {
+                    // If dropping an input port and no valid target found, create a new container
+                    createAndConnectContainer({
+                        ...sourcePort,
+                        parentNode: sourceNode
+                    }, targetPos);
+                }
+                
+                tempConnectionData = null;
+                render();
+            }
+
+            // Add end connection handlers for both mouse and touch
+            svg.on("mouseup.connection touchend.connection", endConnection);
+        }
+
+        // Update createAndConnectContainer to accept a position parameter
+        function createAndConnectContainer(portData, position = null) {
+            const sourceNode = portData.parentNode;
+            const portPos = getAbsPortPosition(sourceNode, portData);
+            
+            // Calculate position if not provided
+            let x, y;
+            if (position) {
+                x = position.x;
+                y = position.y;
+            } else {
+                // Calculate position closer to the source node
+                const offsetX = portData.type === 'input' ? -150 : 150;
+                const worldPos = screenToWorld(portPos.x + offsetX, portPos.y);
+                x = worldPos.x;
+                y = worldPos.y;
+            }
+            
+            // Ensure the container stays within visible bounds
+            const padding = 50;
+            const minX = padding;
+            const maxX = svgWidth - padding;
+            const minY = padding;
+            const maxY = svgHeight - padding;
+            
+            x = Math.max(minX, Math.min(maxX, x));
+            y = Math.max(minY, Math.min(maxY, y));
+
+            // Create the container node with explicit port configuration
+            const containerNode = {
+                id: `node-${++nodeIdCounter}`,
+                type: NODE_TYPES.RESOURCE_DISPLAY,
+                x: x,
+                y: y,
+                width: DEFAULT_NODE_WIDTH,
+                height: DEFAULT_NODE_HEIGHT_RESOURCE,
+                label: `${portData.resourceType} CONTAINER`,
+                resourceType: portData.resourceType,
+                unit: getDefaultUnitForResource(portData.resourceType),
+                maxCapacity: getDefaultCapacityForResource(portData.resourceType),
+                value: 0,
+                isExternal: true, // Set external by default
+                passiveGeneration: 0, // No passive generation by default
+                ports: [
+                    {
+                        id: `p-${nodeIdCounter}-in-0`,
+                        type: 'input',
+                        resourceType: portData.resourceType,
+                        name: `${portData.resourceType} In`,
+                        side: 'left',
+                        yOffsetRatio: 0.5
+                    },
+                    {
+                        id: `p-${nodeIdCounter}-out-0`,
+                        type: 'output',
+                        resourceType: portData.resourceType,
+                        name: `${portData.resourceType} Out`,
+                        side: 'right',
+                        yOffsetRatio: 0.5
+                    }
+                ]
+            };
+            
+            nodes.push(containerNode);
+            
+            // Create connection immediately
+            connectionIdCounter++;
+            const connection = {
+                id: `conn-${connectionIdCounter}`,
+                sourceNodeId: portData.type === 'input' ? containerNode.id : sourceNode.id,
+                sourcePortId: portData.type === 'input' ? containerNode.ports.find(p => p.type === 'output').id : portData.id,
+                targetNodeId: portData.type === 'input' ? sourceNode.id : containerNode.id,
+                targetPortId: portData.type === 'input' ? portData.id : containerNode.ports.find(p => p.type === 'input').id
+            };
+            
+            connections.push(connection);
+            
+            // Force immediate render
+            render();
+        }
+
+        // Modified renderNodes function
+        function renderNodes() {
+            const nodeGroups = zoomGroup.selectAll(".node")
+                .data(nodes, d => d.id)
+                .join(
+                    enter => {
+                        const group = enter.append("g")
+                            .attr("class", d => `node ${d.type} ${d.type === NODE_TYPES.SOLAR_ARRAY ? 'solar-array' : ''}`)
+                            .call(d3.drag().on("start", dragStarted).on("drag", dragged).on("end", dragEnded))
+                            .on("click", (e, d) => { 
+                                e.preventDefault();
+                                e.stopPropagation();
+                                selectNode(d.id); 
+                            });
+
+                        // For resource display nodes, add elements in specific order
+                        const rdEnter = group.filter(d => d.type === NODE_TYPES.RESOURCE_DISPLAY);
+                        rdEnter.append("rect").attr("class", "node-rect");
+                        rdEnter.append("rect").attr("class", "capacity-bar-bg");
+                        rdEnter.append("rect").attr("class", "capacity-bar-fill");
+                        rdEnter.append("text").attr("class", "node-title");
+                        rdEnter.append("text").attr("class", "node-value");
+                        rdEnter.append("text").attr("class", "node-unit");
+                        rdEnter.append("image").attr("class", "node-img");
+                        rdEnter.append("text")
+                            .attr("class", "close-button")
+                            .text("X")
+                            .attr("x", d => d.width - 15)
+                            .attr("y", 15)
+                            .on("click", (e, d) => { 
+                                e.preventDefault();
+                                e.stopPropagation();
+                                removeNode(d.id); 
+                            });
+
+                        // For processor nodes
+                        const procEnter = group.filter(d => d.type === NODE_TYPES.PROCESSOR);
+                        procEnter.append("rect").attr("class", "node-rect");
+                        procEnter.append("text").attr("class", "node-title");
+                        procEnter.append("image").attr("class", "node-img");
+                        procEnter.append("g")
+                            .attr("class", "node-action-button")
+                            .style("cursor", "pointer")
+                            .on("mousedown", (e, d) => { 
+                                e.preventDefault();
+                                e.stopPropagation();
+                                toggleProcessor(d);
+                            })
+                            .append("rect")
+                            .attr("x", d => d.width - 60)
+                            .attr("y", d => d.height - 30)
+                            .attr("width", 50)
+                            .attr("height", 20);
+                        procEnter.select(".node-action-button")
+                            .append("text")
+                            .attr("x", d => d.width - 35)
+                            .attr("y", d => d.height - 15)
+                            .text(d => d.isRunning ? "Stop" : "Start");
+                        procEnter.append("text")
+                            .attr("class", "close-button")
+                            .text("X")
+                            .attr("x", d => d.width - 15)
+                            .attr("y", 15)
+                            .on("click", (e, d) => { 
+                                e.preventDefault();
+                                e.stopPropagation();
+                                removeNode(d.id); 
+                            });
+
+                        // For solar array nodes
+                        const solarEnter = group.filter(d => d.type === NODE_TYPES.SOLAR_ARRAY);
+                        solarEnter.append("rect").attr("class", "node-rect");
+                        solarEnter.append("rect").attr("class", "power-bar-bg");
+                        solarEnter.append("rect").attr("class", "power-bar-fill");
+                        solarEnter.append("text").attr("class", "node-title");
+                        solarEnter.append("image").attr("class", "node-img");
+                        solarEnter.append("text")
+                            .attr("class", "close-button")
+                            .text("X")
+                            .attr("x", d => d.width - 15)
+                            .attr("y", 15)
+                            .on("click", (e, d) => { 
+                                e.preventDefault();
+                                e.stopPropagation();
+                                removeNode(d.id); 
+                            });
+
+                        // Add ports for all nodes
+                        group.selectAll(".port-handle")
+                            .data(d => d.ports.map(p => ({...p, parentNode: d})))
+                            .enter()
+                            .append("circle")
+                            .attr("class", p => `port-handle ${p.type}`)
+                            .attr("r", 12)
+                            .style("touch-action", "none")
+                            .on("mousedown", (e, pData) => { 
+                                e.preventDefault();
+                                e.stopPropagation();
+                                startConnection(e, pData.parentNode.id, pData.id); 
+                            })
+                            .on("touchstart", (e, pData) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                startConnection(e, pData.parentNode.id, pData.id);
+                            })
+                            .append("title")
+                            .text(p => `${p.name || 'Port'} (${p.resourceType})`);
+
+                        return group;
+                    },
+                    update => {
+                        // Update node positions and attributes
+                        update.attr("transform", d => `translate(${d.x},${d.y})`);
+                        
+                        // Update node elements
+                        update.select(".node-rect")
+                            .attr("width", d => d.width)
+                            .attr("height", d => d.height);
+                            
+                        update.select(".node-title")
+                            .attr("x", d => d.width/2)
+                            .attr("y", 25)
+                            .text(d => d.label);
+
+                        // Update close button positions
+                        update.select(".close-button")
+                            .attr("x", d => d.width - 15)
+                            .attr("y", 15);
+
+                        // Update resource display nodes
+                        const rdUpdate = update.filter(d => d.type === NODE_TYPES.RESOURCE_DISPLAY);
+                        rdUpdate.each(function(d) {
+                            const group = d3.select(this);
+                            const valueY = d.img ? 85 : (d.height/2 + 10);
+                            const unitY = d.img ? 105 : (d.height/2 + 30);
+                            
+                            // Update capacity bar background
+                            group.select(".capacity-bar-bg")
+                                .attr("x", 0)
+                                .attr("y", 0)
+                                .attr("width", d.width)
+                                .attr("height", d.height)
+                                .style("display", d.maxCapacity && d.maxCapacity > 0 ? null : "none");
+
+                            // Update capacity bar fill
+                            const fillRatio = d.maxCapacity && d.maxCapacity > 0 ? Math.max(0, Math.min(1, d.value / d.maxCapacity)) : 0;
+                            const fillHeight = fillRatio * d.height;
+                            group.select(".capacity-bar-fill")
+                                .attr("x", 0)
+                                .attr("y", d.height - fillHeight)
+                                .attr("width", d.width)
+                                .attr("height", fillHeight)
+                                .style("display", d.maxCapacity && d.maxCapacity > 0 ? null : "none")
+                                .style("fill", d.progressColor || '#6fa06c');
+
+                            // Update value and unit text
+                            group.select(".node-value")
+                                .text(d.value.toFixed(1))
+                                .attr("x", d.width/2)
+                                .attr("y", valueY);
+
+                            group.select(".node-unit")
+                                .text(d.unit)
+                                .attr("x", d.width/2)
+                                .attr("y", unitY);
+                        });
+
+                        // Update processor nodes
+                        const procUpdate = update.filter(d => d.type === NODE_TYPES.PROCESSOR);
+                        procUpdate.each(function(d) {
+                            const group = d3.select(this);
+                            
+                            // Update node status classes
+                            group.classed("is-running", d.isRunning)
+                                .classed("is-stalled", !d.canProcessLastStep && d.isRunning)
+                                .classed("is-awaiting-batch", d.awaitingBatchInputs);
+
+                            // Update image if present
+                            if (d.img) {
+                                group.select(".node-img")
+                                    .attr("x", 10)
+                                    .attr("y", 40)
+                                    .attr("width", d.width - 20)
+                                    .attr("height", d.height - 80)
+                                    .attr("xlink:href", d.img);
+                            }
+
+                            // Update action button
+                            if (!group.select(".node-action-button").size()) {
+                                const actionButton = group.append("g")
+                                    .attr("class", "node-action-button")
+                                    .style("cursor", "pointer")
+                                    .on("mousedown", (e, d) => { 
+                                        e.stopPropagation(); 
+                                        toggleProcessor(d);
+                                    });
+                                
+                                actionButton.append("rect")
+                                    .attr("x", d.width/2 - 40)
+                                    .attr("y", d.height - 40)
+                                    .attr("width", 80)
+                                    .attr("height", 30);
+                                
+                                actionButton.append("text")
+                                    .attr("x", d.width/2)
+                                    .attr("y", d.height - 25)
+                                    .text(d.isRunning ? "Stop" : "Start");
+                            } else {
+                                group.select(".node-action-button rect")
+                                    .attr("x", d.width/2 - 40)
+                                    .attr("y", d.height - 40)
+                                    .attr("width", 80)
+                                    .attr("height", 30);
+                                
+                                group.select(".node-action-button text")
+                                    .attr("x", d.width/2)
+                                    .attr("y", d.height - 25)
+                                    .text(d.isRunning ? "Stop" : "Start");
+                            }
+
+                            // Add/update port labels
+                            group.selectAll(".port-text-label").remove();
+                            d.ports.forEach(port => {
+                                const portY = d.height * (port.yOffsetRatio || 0.5);
+                                const labelX = port.side === 'left' ? PORT_TEXT_OFFSETX : d.width - PORT_TEXT_OFFSETX;
+                                const textAnchor = port.side === 'left' ? 'start' : 'end';
+                                
+                                group.append("text")
+                                    .attr("class", `port-text-label ${port.type}`)
+                                    .attr("x", labelX)
+                                    .attr("y", portY + PORT_TEXT_OFFSETY)
+                                    .style("text-anchor", textAnchor)
+                                    .text(port.name);
+                            });
+                        });
+
+                        // Update solar array nodes
+                        const solarUpdate = update.filter(d => d.type === NODE_TYPES.SOLAR_ARRAY);
+                        solarUpdate.each(function(d) {
+                            const group = d3.select(this);
+                            
+                            // Update node status classes
+                            group.classed("is-running", d.currentOutput > 0.001);
+                            
+                            // Update power bar
+                            group.select(".power-bar-bg")
+                                .attr("x", 0)
+                                .attr("y", 0)
+                                .attr("width", d.width)
+                                .attr("height", d.height);
+
+                            const powerRatio = d.currentOutput / d.ratedOutput;
+                            const fillHeight = powerRatio * d.height;
+                            group.select(".power-bar-fill")
+                                .attr("x", 0)
+                                .attr("y", d.height - fillHeight)
+                                .attr("width", d.width)
+                                .attr("height", fillHeight);
+                            
+                            // Update image if present
+                            if (d.img) {
+                                group.select(".node-img")
+                                    .attr("x", 10)
+                                    .attr("y", 40)
+                                    .attr("width", d.width - 20)
+                                    .attr("height", d.height - 80)
+                                    .attr("xlink:href", d.img);
+                            }
+
+                            // Add/update port labels
+                            group.selectAll(".port-text-label").remove();
+                            d.ports.forEach(port => {
+                                const portY = d.height * (port.yOffsetRatio || 0.5);
+                                const labelX = port.side === 'left' ? PORT_TEXT_OFFSETX : d.width - PORT_TEXT_OFFSETX;
+                                const textAnchor = port.side === 'left' ? 'start' : 'end';
+                                
+                                group.append("text")
+                                    .attr("class", `port-text-label ${port.type}`)
+                                    .attr("x", labelX)
+                                    .attr("y", portY + PORT_TEXT_OFFSETY)
+                                    .style("text-anchor", textAnchor)
+                                    .text(port.name);
+                            });
+                        });
+                            
+                        // Update ports
+                        update.selectAll(".port-handle")
+                            .data(d => d.ports.map(p => ({...p, parentNode: d})))
+                            .join(
+                                enter => enter.append("circle")
+                                    .attr("class", p => `port-handle ${p.type}`)
+                                    .attr("r", 12)  // Explicitly set initial radius
+                                    .style("touch-action", "none")  // Prevent default touch actions
+                                    .on("mousedown", (e, pData) => { 
+                                        e.stopPropagation(); 
+                                        startConnection(e, pData.parentNode.id, pData.id); 
+                                    })
+                                    .on("touchstart", (e, pData) => {
+                                        e.preventDefault();  // Prevent default touch behavior
+                                        e.stopPropagation();
+                                        startConnection(e, pData.parentNode.id, pData.id);
+                                    })
+                                    .on("dblclick", (e, pData) => { 
+                                        e.stopPropagation(); 
+                                        createAndConnectContainer(pData);
+                                    })
+                                    .append("title")
+                                    .text(p => `${p.name || 'Port'} (${p.resourceType})`),
+                                update => update,
+                                exit => exit.remove()
+                            )
+                            .attr("cx", p => p.side === 'left' ? 0 : p.parentNode.width)
+                            .attr("cy", p => p.parentNode.height * (p.yOffsetRatio || 0.5));
+
+                        return update;
+                    },
+                    exit => exit.remove()
+                );
+        }
+
+        let nodes = []; let connections = []; let nodeIdCounter = 0; let connectionIdCounter = 0;
+        let inspectorIoItemIdCounter = 0; let simulationInterval = null; let isPlaying = false;
+        let elapsedHours = 0; let currentSimSpeedMs = 1000; const baseSimSpeedMs = 1000; 
+        let selectedNodeId = null;
+
+        const NODE_TYPES = { RESOURCE_DISPLAY: 'resource-display', PROCESSOR: 'processor', SOLAR_ARRAY: 'solar-array' };
+        const RESOURCE_TYPES = { 
+            PLASTIC: 'Plastic', 
+            PLASTIC_FLAKES: 'Plastic Flakes', 
+            POWER: 'Power', 
+            WIND_TURBINES: 'Wind Turbines', 
+            BIOMASS: 'Biomass', 
+            POOP_GAS: 'Poop-Gas', 
+            BIOCHAR: 'Biochar', 
+            CUSTOM_PRODUCT_A: 'Custom Product A', 
+            CUSTOM_PRODUCT_B: 'Custom Product B',
+            CUSTOM: 'Custom',  // Add Custom type that can connect to anything
+            MONEY: 'Money'     // Add Money resource type
+        };
+        
+        const DEFAULT_NODE_WIDTH = 200;  // Increased width for better card layout
+        const DEFAULT_NODE_HEIGHT_RESOURCE = 280;  // Increased height for better proportions
+        const DEFAULT_NODE_HEIGHT_PROCESSOR = 320;  // Increased height for processors
+        const DEFAULT_NODE_HEIGHT_SOLAR = 300;  // Increased height for solar arrays
+        const CAPACITY_BAR_WIDTH = 12; const CAPACITY_BAR_PADDING = 5;
+        const PORT_HANDLE_RADIUS = 7; const PORT_TEXT_OFFSETX = PORT_HANDLE_RADIUS + 10; const PORT_TEXT_OFFSETY = 4; 
+
+        // Add default resource colors after the RESOURCE_TYPES definition
+        const RESOURCE_COLORS = {
+            [RESOURCE_TYPES.POWER]: '#ff0000',        // Red for electrical power
+            [RESOURCE_TYPES.BIOCHAR]: '#000000',     // Black for Biochar
+            [RESOURCE_TYPES.POOP_GAS]: '#d3d3d3',    // Light Gray for Poop-Gas
+            [RESOURCE_TYPES.BIOMASS]: '#00ff00',     // Green for Biomass
+            [RESOURCE_TYPES.PLASTIC]: '#ffff00',     // Yellow for Plastic Trash
+            [RESOURCE_TYPES.PLASTIC_FLAKES]: '#ffff00', // Yellow for Plastic Flakes
+            [RESOURCE_TYPES.WIND_TURBINES]: '#808080', // Gray for Wind Turbines
+            [RESOURCE_TYPES.MONEY]: '#00ff00'        // Green for Money
+        };
+
+        // Add default costs for modules
+        const MODULE_COSTS = {
+            'TrashPrinter': 1250,
+            'BiocharReactor': 1500,
+            'Shredder': 1750,
+            'SolarArray': 800,
+            'BatteryBank': 500,
+            'WindTurbines': 1000
+        };
+
+        function createNode(type, options = {}) {
+            nodeIdCounter++;
+            let defaultImg = null;
+            if (svgWidth === undefined) updateSvgDimensions();
+
+            const baseNode = {
+                id: `node-${nodeIdCounter}`,
+                x: options.x || Math.random()*(svgWidth-200)+50,
+                y: options.y || Math.random()*(svgHeight-200)+50,
+                ports: [],
+                width: options.width || DEFAULT_NODE_WIDTH,
+                height: options.height || (type === NODE_TYPES.PROCESSOR ? DEFAULT_NODE_HEIGHT_PROCESSOR : (type === NODE_TYPES.SOLAR_ARRAY ? DEFAULT_NODE_HEIGHT_SOLAR : DEFAULT_NODE_HEIGHT_RESOURCE)),
+                label: options.label || 'Default Label',
+                img: options.img || defaultImg,
+                canProcessLastStep: false,
+                type: type,
+                maxCapacity: options.maxCapacity || null,
+                progressColor: options.progressColor || '#6fa06c',
+                cost: options.cost || 0,
+                // Batch properties (for processors)
+                batchDuration: options.batchDuration || 6,
+                batchTimeElapsed: 0,
+                isInBatch: false,
+                awaitingBatchInputs: false,
+                ...options
+            };
+            let newNode;
+            switch (type) {
+                case NODE_TYPES.RESOURCE_DISPLAY:
+                    newNode = {
+                        ...baseNode, 
+                        value: options.value || 0, 
+                        unit: options.unit || 'Units', 
+                        resourceType: options.resourceType || RESOURCE_TYPES.CUSTOM_PRODUCT_A,
+                        isExternal: options.isExternal || false,
+                        passiveGeneration: options.passiveGeneration || 0,
+                        ports: []
+                    };
+
+                    // Standardize container node creation
+                    if (options.subType) {
+                        const containerConfig = {
+                            'PlasticTrash': {
+                                label: 'PLASTIC TRASH',
+                                unit: 'Kilograms',
+                                resourceType: RESOURCE_TYPES.PLASTIC,
+                                isSource: true,
+                                passiveGeneration: 5,
+                                ports: [{id: `p-${nodeIdCounter}-out-0`, type: 'output', resourceType: RESOURCE_TYPES.PLASTIC, name: 'Plastic Out', side: 'right', yOffsetRatio: 0.5}]
+                            },
+                            'PlasticFlakes': {
+                                label: 'PLASTIC FLAKES',
+                                unit: 'Kilograms',
+                                resourceType: RESOURCE_TYPES.PLASTIC_FLAKES,
+                                maxCapacity: 50,
+                                ports: [
+                                    {id: `p-${nodeIdCounter}-in-0`, type: 'input', resourceType: RESOURCE_TYPES.PLASTIC_FLAKES, name: 'Flakes In', side: 'left', yOffsetRatio: 0.5},
+                                    {id: `p-${nodeIdCounter}-out-0`, type: 'output', resourceType: RESOURCE_TYPES.PLASTIC_FLAKES, name: 'Flakes Out', side: 'right', yOffsetRatio: 0.5}
+                                ]
+                            },
+                            'WindTurbines': {
+                                label: 'WIND TURBINES',
+                                unit: 'Kilograms',
+                                resourceType: RESOURCE_TYPES.WIND_TURBINES,
+                                ports: [{id: `p-${nodeIdCounter}-in-0`, type: 'input', resourceType: RESOURCE_TYPES.WIND_TURBINES, name: 'Turbines In', side: 'left', yOffsetRatio: 0.5}]
+                            },
+                            'BatteryBank': {
+                                label: 'BATTERY BANK',
+                                unit: 'kWh',
+                                resourceType: RESOURCE_TYPES.POWER,
+                                passiveGeneration: 0,
+                                maxCapacity: 10.8,
+                                cost: MODULE_COSTS['BatteryBank'],
+                                ports: [
+                                    {id: `p-${nodeIdCounter}-in-power`, type: 'input', resourceType: RESOURCE_TYPES.POWER, name: 'Charge In', side: 'left', yOffsetRatio: 0.5},
+                                    {id: `p-${nodeIdCounter}-out-power`, type: 'output', resourceType: RESOURCE_TYPES.POWER, name: 'Power Out', side: 'right', yOffsetRatio: 0.5}
+                                ]
+                            },
+                            'Biomass': {
+                                label: 'BIOMASS',
+                                unit: 'kg',
+                                resourceType: RESOURCE_TYPES.BIOMASS,
+                                isSource: true,
+                                passiveGeneration: 2,
+                                ports: [{id: `p-${nodeIdCounter}-out-0`, type: 'output', resourceType: RESOURCE_TYPES.BIOMASS, name: 'Biomass Out', side: 'right', yOffsetRatio: 0.5}]
+                            },
+                            'PoopGas': {
+                                label: 'POOP-GAS',
+                                unit: 'L',
+                                resourceType: RESOURCE_TYPES.POOP_GAS,
+                                maxCapacity: 10000,
+                                ports: [
+                                    {id: `p-${nodeIdCounter}-in-0`, type: 'input', resourceType: RESOURCE_TYPES.POOP_GAS, name: 'Gas In', side: 'left', yOffsetRatio: 0.5},
+                                    {id: `p-${nodeIdCounter}-out-0`, type: 'output', resourceType: RESOURCE_TYPES.POOP_GAS, name: 'Gas Out', side: 'right', yOffsetRatio: 0.5}
+                                ]
+                            },
+                            'Biochar': {
+                                label: 'BIOCHAR',
+                                unit: 'kg',
+                                resourceType: RESOURCE_TYPES.BIOCHAR,
+                                maxCapacity: 50,
+                                ports: [
+                                    {id: `p-${nodeIdCounter}-in-0`, type: 'input', resourceType: RESOURCE_TYPES.BIOCHAR, name: 'Biochar In', side: 'left', yOffsetRatio: 0.5},
+                                    {id: `p-${nodeIdCounter}-out-0`, type: 'output', resourceType: RESOURCE_TYPES.BIOCHAR, name: 'Biochar Out', side: 'right', yOffsetRatio: 0.5}
+                                ]
+                            }
+                        };
+
+                        const config = containerConfig[options.subType];
+                        if (config) {
+                            newNode = { ...newNode, ...config };
+                        }
+                    } else if (options.subType === 'CustomContainer') {
+                        newNode = {
+                            ...baseNode,
+                            value: 0,
+                            unit: options.unit || 'Units',
+                            resourceType: options.resourceType || RESOURCE_TYPES.CUSTOM_PRODUCT_A,
+                            maxCapacity: options.maxCapacity || null,
+                            ports: [
+                                {id: `p-${nodeIdCounter}-in-0`, type: 'input', resourceType: options.resourceType || RESOURCE_TYPES.CUSTOM_PRODUCT_A, name: `${options.label || 'Custom'} In`, side: 'left', yOffsetRatio: 0.5},
+                                {id: `p-${nodeIdCounter}-out-0`, type: 'output', resourceType: options.resourceType || RESOURCE_TYPES.CUSTOM_PRODUCT_A, name: `${options.label || 'Custom'} Out`, side: 'right', yOffsetRatio: 0.5}
+                            ]
+                        };
+                    }
+                    break;
+                case NODE_TYPES.PROCESSOR: 
+                     newNode = {...baseNode, isRunning:false, config:{inputs:[], outputs:[]}, ...options};
+                     if (options.subType === 'Shredder') { newNode = {...newNode, label:'SHREDDER', cost: MODULE_COSTS['Shredder'], config:{inputs:[{name:'PLASTIC TRASH',resourceType:RESOURCE_TYPES.PLASTIC,rate:5},{name:'POWER',resourceType:RESOURCE_TYPES.POWER,rate:0.6}], outputs:[{name:'SHREDDED PLASTIC',resourceType:RESOURCE_TYPES.PLASTIC_FLAKES,rate:5}]}}; }
+                     if (options.subType === 'TrashPrinter') { newNode = {...newNode, label:'TRASH PRINTER', cost: MODULE_COSTS['TrashPrinter'], config:{inputs:[{name:'SHREDDED PLASTIC',resourceType:RESOURCE_TYPES.PLASTIC_FLAKES,rate:0.2},{name:'POWER',resourceType:RESOURCE_TYPES.POWER,rate:0.2}], outputs:[{name:'WIND TURBINES',resourceType:RESOURCE_TYPES.WIND_TURBINES,rate:0.2}]}}; }
+                     if (options.subType === 'BiocharReactor') { 
+                         newNode = {...newNode, label:'BIOCHAR REACTOR', cost: MODULE_COSTS['BiocharReactor'], batchDuration: 6,
+                                    config:{inputs:[{name:'POWER',resourceType:RESOURCE_TYPES.POWER,rate:1, isBatchIO: false}, {name:'BIOMASS',resourceType:RESOURCE_TYPES.BIOMASS,rate:5, isBatchIO: true}], 
+                                            outputs:[{name:'POOP-GAS',resourceType:RESOURCE_TYPES.POOP_GAS,rate:250, isBatchIO: false}, {name:'BIOCHAR',resourceType:RESOURCE_TYPES.BIOCHAR,rate:1, isBatchIO: true}]}}; 
+                     }
+                     if (options.subType === 'CustomProcessor') { newNode = {...newNode, label:options.label||'CUSTOM PROC', cost: options.cost || 0, config:options.config||{inputs:[],outputs:[]}}; }
+                     regeneratePortsForNode(newNode);
+                     break;
+                case NODE_TYPES.SOLAR_ARRAY: newNode = { ...baseNode, label: 'SOLAR ARRAY', cost: MODULE_COSTS['SolarArray'], ratedOutput: options.ratedOutput || 2.4, currentOutput: 0, config: { inputs: [], outputs: [{ portId: `p-${nodeIdCounter}-out-solar`, name: 'Solar Power', resourceType: RESOURCE_TYPES.POWER, rate: 0 }] }, ports: [{id:`p-${nodeIdCounter}-out-solar`,type:'output',resourceType:RESOURCE_TYPES.POWER,name:'Power Out',side:'right',yOffsetRatio:0.5}] }; break;
+                default: console.error("Unknown type:", type, options); return null; 
+            } 
+            return newNode; 
+        }
+        function regeneratePortsForNode(node){ /* ... (Same) ... */ if (node.type !== NODE_TYPES.PROCESSOR) return; node.ports = []; const inputCfgs = node.config.inputs || []; const outputCfgs = node.config.outputs || []; let inputPortYRatioStep = 1 / (inputCfgs.length + 1); inputCfgs.forEach((inp,idx)=>{ inp.portId=`p-${node.id}-in-${idx}`; node.ports.push({id:inp.portId,type:'input',resourceType:inp.resourceType,name:inp.name,side:'left',yOffsetRatio:inputPortYRatioStep*(idx+1)}); }); let outputPortYRatioStep = 1 / (outputCfgs.length + 1); outputCfgs.forEach((out,idx)=>{ out.portId=`p-${node.id}-out-${idx}`; node.ports.push({id:out.portId,type:'output',resourceType:out.resourceType,name:out.name,side:'right',yOffsetRatio:outputPortYRatioStep*(idx+1)}); }); }
+
+        function render() {
+            renderNodes();
+            renderConnections();
+            updateTimeDisplay();
+            updateCostDisplay();
+        }
+
+        function getAbsPortPosition(node, port) {
+            let absX = node.x;
+            let absY = node.y + node.height * (port.yOffsetRatio || 0.5);
+            if (port.side === 'left') absX += 0;
+            else if (port.side === 'right') absX += node.width;
+            return { x: absX, y: absY };
+        }
+
+        function renderNodes() {
+            const nodeGroups = zoomGroup.selectAll(".node")
+                .data(nodes, d => d.id)
+                .join(
+                    enter => {
+                        const group = enter.append("g")
+                            .attr("class", d => `node ${d.type} ${d.type === NODE_TYPES.SOLAR_ARRAY ? 'solar-array' : ''}`)
+                            .call(d3.drag().on("start", dragStarted).on("drag", dragged).on("end", dragEnded))
+                            .on("click", (e, d) => { 
+                                e.preventDefault();
+                                e.stopPropagation();
+                                selectNode(d.id); 
+                            });
+
+                        // For resource display nodes, add elements in specific order
+                        const rdEnter = group.filter(d => d.type === NODE_TYPES.RESOURCE_DISPLAY);
+                        rdEnter.append("rect").attr("class", "node-rect");
+                        rdEnter.append("rect").attr("class", "capacity-bar-bg");
+                        rdEnter.append("rect").attr("class", "capacity-bar-fill");
+                        rdEnter.append("text").attr("class", "node-title");
+                        rdEnter.append("text").attr("class", "node-value");
+                        rdEnter.append("text").attr("class", "node-unit");
+                        rdEnter.append("image").attr("class", "node-img");
+                        rdEnter.append("text")
+                            .attr("class", "close-button")
+                            .text("X")
+                            .attr("x", d => d.width - 15)
+                            .attr("y", 15)
+                            .on("click", (e, d) => { 
+                                e.preventDefault();
+                                e.stopPropagation();
+                                removeNode(d.id); 
+                            });
+
+                        // For processor nodes
+                        const procEnter = group.filter(d => d.type === NODE_TYPES.PROCESSOR);
+                        procEnter.append("rect").attr("class", "node-rect");
+                        procEnter.append("text").attr("class", "node-title");
+                        procEnter.append("image").attr("class", "node-img");
+                        procEnter.append("g")
+                            .attr("class", "node-action-button")
+                            .style("cursor", "pointer")
+                            .on("mousedown", (e, d) => { 
+                                e.preventDefault();
+                                e.stopPropagation();
+                                toggleProcessor(d);
+                            })
+                            .append("rect")
+                            .attr("x", d => d.width - 60)
+                            .attr("y", d => d.height - 30)
+                            .attr("width", 50)
+                            .attr("height", 20);
+                        procEnter.select(".node-action-button")
+                            .append("text")
+                            .attr("x", d => d.width - 35)
+                            .attr("y", d => d.height - 15)
+                            .text(d => d.isRunning ? "Stop" : "Start");
+                        procEnter.append("text")
+                            .attr("class", "close-button")
+                            .text("X")
+                            .attr("x", d => d.width - 15)
+                            .attr("y", 15)
+                            .on("click", (e, d) => { 
+                                e.preventDefault();
+                                e.stopPropagation();
+                                removeNode(d.id); 
+                            });
+
+                        // For solar array nodes
+                        const solarEnter = group.filter(d => d.type === NODE_TYPES.SOLAR_ARRAY);
+                        solarEnter.append("rect").attr("class", "node-rect");
+                        solarEnter.append("rect").attr("class", "power-bar-bg");
+                        solarEnter.append("rect").attr("class", "power-bar-fill");
+                        solarEnter.append("text").attr("class", "node-title");
+                        solarEnter.append("image").attr("class", "node-img");
+                        solarEnter.append("text")
+                            .attr("class", "close-button")
+                            .text("X")
+                            .attr("x", d => d.width - 15)
+                            .attr("y", 15)
+                            .on("click", (e, d) => { 
+                                e.preventDefault();
+                                e.stopPropagation();
+                                removeNode(d.id); 
+                            });
+
+                        // Add ports for all nodes
+                        group.selectAll(".port-handle")
+                            .data(d => d.ports.map(p => ({...p, parentNode: d})))
+                            .enter()
+                            .append("circle")
+                            .attr("class", p => `port-handle ${p.type}`)
+                            .attr("r", 12)
+                            .style("touch-action", "none")
+                            .on("mousedown", (e, pData) => { 
+                                e.preventDefault();
+                                e.stopPropagation();
+                                startConnection(e, pData.parentNode.id, pData.id); 
+                            })
+                            .on("touchstart", (e, pData) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                startConnection(e, pData.parentNode.id, pData.id);
+                            })
+                            .append("title")
+                            .text(p => `${p.name || 'Port'} (${p.resourceType})`);
+
+                        return group;
+                    },
+                    update => {
+                        // Update node positions and attributes
+                        update.attr("transform", d => `translate(${d.x},${d.y})`);
+                        
+                        // Update node elements
+                        update.select(".node-rect")
+                            .attr("width", d => d.width)
+                            .attr("height", d => d.height);
+                            
+                        update.select(".node-title")
+                            .attr("x", d => d.width/2)
+                            .attr("y", 25)
+                            .text(d => d.label);
+
+                        // Update close button positions
+                        update.select(".close-button")
+                            .attr("x", d => d.width - 15)
+                            .attr("y", 15);
+
+                        // Update resource display nodes
+                        const rdUpdate = update.filter(d => d.type === NODE_TYPES.RESOURCE_DISPLAY);
+                        rdUpdate.each(function(d) {
+                            const group = d3.select(this);
+                            const valueY = d.img ? 85 : (d.height/2 + 10);
+                            const unitY = d.img ? 105 : (d.height/2 + 30);
+                            
+                            // Update capacity bar background
+                            group.select(".capacity-bar-bg")
+                                .attr("x", 0)
+                                .attr("y", 0)
+                                .attr("width", d.width)
+                                .attr("height", d.height)
+                                .style("display", d.maxCapacity && d.maxCapacity > 0 ? null : "none");
+
+                            // Update capacity bar fill
+                            const fillRatio = d.maxCapacity && d.maxCapacity > 0 ? Math.max(0, Math.min(1, d.value / d.maxCapacity)) : 0;
+                            const fillHeight = fillRatio * d.height;
+                            group.select(".capacity-bar-fill")
+                                .attr("x", 0)
+                                .attr("y", d.height - fillHeight)
+                                .attr("width", d.width)
+                                .attr("height", fillHeight)
+                                .style("display", d.maxCapacity && d.maxCapacity > 0 ? null : "none")
+                                .style("fill", d.progressColor || '#6fa06c');
+
+                            // Update value and unit text
+                            group.select(".node-value")
+                                .text(d.value.toFixed(1))
+                                .attr("x", d.width/2)
+                                .attr("y", valueY);
+
+                            group.select(".node-unit")
+                                .text(d.unit)
+                                .attr("x", d.width/2)
+                                .attr("y", unitY);
+                        });
+
+                        // Update processor nodes
+                        const procUpdate = update.filter(d => d.type === NODE_TYPES.PROCESSOR);
+                        procUpdate.each(function(d) {
+                            const group = d3.select(this);
+                            
+                            // Update node status classes
+                            group.classed("is-running", d.isRunning)
+                                .classed("is-stalled", !d.canProcessLastStep && d.isRunning)
+                                .classed("is-awaiting-batch", d.awaitingBatchInputs);
+
+                            // Update image if present
+                            if (d.img) {
+                                group.select(".node-img")
+                                    .attr("x", 10)
+                                    .attr("y", 40)
+                                    .attr("width", d.width - 20)
+                                    .attr("height", d.height - 80)
+                                    .attr("xlink:href", d.img);
+                            }
+
+                            // Update action button
+                            if (!group.select(".node-action-button").size()) {
+                                const actionButton = group.append("g")
+                                    .attr("class", "node-action-button")
+                                    .style("cursor", "pointer")
+                                    .on("mousedown", (e, d) => { 
+                                        e.stopPropagation(); 
+                                        toggleProcessor(d);
+                                    });
+                                
+                                actionButton.append("rect")
+                                    .attr("x", d.width/2 - 40)
+                                    .attr("y", d.height - 40)
+                                    .attr("width", 80)
+                                    .attr("height", 30);
+                                
+                                actionButton.append("text")
+                                    .attr("x", d.width/2)
+                                    .attr("y", d.height - 25)
+                                    .text(d.isRunning ? "Stop" : "Start");
+                            } else {
+                                group.select(".node-action-button rect")
+                                    .attr("x", d.width/2 - 40)
+                                    .attr("y", d.height - 40)
+                                    .attr("width", 80)
+                                    .attr("height", 30);
+                                
+                                group.select(".node-action-button text")
+                                    .attr("x", d.width/2)
+                                    .attr("y", d.height - 25)
+                                    .text(d.isRunning ? "Stop" : "Start");
+                            }
+
+                            // Add/update port labels
+                            group.selectAll(".port-text-label").remove();
+                            d.ports.forEach(port => {
+                                const portY = d.height * (port.yOffsetRatio || 0.5);
+                                const labelX = port.side === 'left' ? PORT_TEXT_OFFSETX : d.width - PORT_TEXT_OFFSETX;
+                                const textAnchor = port.side === 'left' ? 'start' : 'end';
+                                
+                                group.append("text")
+                                    .attr("class", `port-text-label ${port.type}`)
+                                    .attr("x", labelX)
+                                    .attr("y", portY + PORT_TEXT_OFFSETY)
+                                    .style("text-anchor", textAnchor)
+                                    .text(port.name);
+                            });
+                        });
+
+                        // Update solar array nodes
+                        const solarUpdate = update.filter(d => d.type === NODE_TYPES.SOLAR_ARRAY);
+                        solarUpdate.each(function(d) {
+                            const group = d3.select(this);
+                            
+                            // Update node status classes
+                            group.classed("is-running", d.currentOutput > 0.001);
+                            
+                            // Update power bar
+                            group.select(".power-bar-bg")
+                                .attr("x", 0)
+                                .attr("y", 0)
+                                .attr("width", d.width)
+                                .attr("height", d.height);
+
+                            const powerRatio = d.currentOutput / d.ratedOutput;
+                            const fillHeight = powerRatio * d.height;
+                            group.select(".power-bar-fill")
+                                .attr("x", 0)
+                                .attr("y", d.height - fillHeight)
+                                .attr("width", d.width)
+                                .attr("height", fillHeight);
+                            
+                            // Update image if present
+                            if (d.img) {
+                                group.select(".node-img")
+                                    .attr("x", 10)
+                                    .attr("y", 40)
+                                    .attr("width", d.width - 20)
+                                    .attr("height", d.height - 80)
+                                    .attr("xlink:href", d.img);
+                            }
+
+                            // Add/update port labels
+                            group.selectAll(".port-text-label").remove();
+                            d.ports.forEach(port => {
+                                const portY = d.height * (port.yOffsetRatio || 0.5);
+                                const labelX = port.side === 'left' ? PORT_TEXT_OFFSETX : d.width - PORT_TEXT_OFFSETX;
+                                const textAnchor = port.side === 'left' ? 'start' : 'end';
+                                
+                                group.append("text")
+                                    .attr("class", `port-text-label ${port.type}`)
+                                    .attr("x", labelX)
+                                    .attr("y", portY + PORT_TEXT_OFFSETY)
+                                    .style("text-anchor", textAnchor)
+                                    .text(port.name);
+                            });
+                        });
+                            
+                        // Update ports
+                        update.selectAll(".port-handle")
+                            .data(d => d.ports.map(p => ({...p, parentNode: d})))
+                            .join(
+                                enter => enter.append("circle")
+                                    .attr("class", p => `port-handle ${p.type}`)
+                                    .attr("r", 12)  // Explicitly set initial radius
+                                    .style("touch-action", "none")  // Prevent default touch actions
+                                    .on("mousedown", (e, pData) => { 
+                                        e.stopPropagation(); 
+                                        startConnection(e, pData.parentNode.id, pData.id); 
+                                    })
+                                    .on("touchstart", (e, pData) => {
+                                        e.preventDefault();  // Prevent default touch behavior
+                                        e.stopPropagation();
+                                        startConnection(e, pData.parentNode.id, pData.id);
+                                    })
+                                    .on("dblclick", (e, pData) => { 
+                                        e.stopPropagation(); 
+                                        createAndConnectContainer(pData);
+                                    })
+                                    .append("title")
+                                    .text(p => `${p.name || 'Port'} (${p.resourceType})`),
+                                update => update,
+                                exit => exit.remove()
+                            )
+                            .attr("cx", p => p.side === 'left' ? 0 : p.parentNode.width)
+                            .attr("cy", p => p.parentNode.height * (p.yOffsetRatio || 0.5));
+
+                        return update;
+                    },
+                    exit => exit.remove()
+                );
+        }
+
+        const inspectorSolarArrayFields = document.getElementById("inspectorSolarArrayFields"); const inspectorRatedOutput = document.getElementById("inspectorRatedOutput"); const inspectorCurrentOutput = document.getElementById("inspectorCurrentOutput"); const nodeBuilderSection=document.getElementById("nodeBuilderSection"); const nodeInspectorSection=document.getElementById("nodeInspectorSection"); const inspectorNodeName=document.getElementById("inspectorNodeName"); const inspectorNodeImageURL=document.getElementById("inspectorNodeImageURL"); const inspectorProcessorFields=document.getElementById("inspectorProcessorFields"); const inspectorInputsContainer=document.getElementById("inspectorInputsContainer"); const inspectorOutputsContainer=document.getElementById("inspectorOutputsContainer"); const inspectorResourceDisplayFields=document.getElementById("inspectorResourceDisplayFields"); const inspectorNodeUnit=document.getElementById("inspectorNodeUnit"); const inspectorPassiveRate=document.getElementById("inspectorPassiveRate"); const inspectorMaxCapacity = document.getElementById("inspectorMaxCapacity"); const inspectorProgressColor = document.getElementById("inspectorProgressColor");
+        const inspectorBatchDurationField = document.getElementById("inspectorBatchDurationField"); const inspectorBatchDuration = document.getElementById("inspectorBatchDuration");
+        const customBatchDuration = document.getElementById("customBatchDuration");
+        const inspectorIsExternal = document.getElementById("inspectorIsExternal");
+
+
+        function isBatchProcessor(node) {
+            if (node.type !== NODE_TYPES.PROCESSOR || !node.config) return false;
+            return (node.config.inputs || []).some(io => io.isBatchIO) || (node.config.outputs || []).some(io => io.isBatchIO);
+        }
+
+        function selectNode(nodeId){ const node=findNodeById(nodeId);if(!node){deselectNode();return;}selectedNodeId=nodeId;nodeBuilderSection.classList.add("hidden");nodeInspectorSection.classList.remove("hidden");populateInspector(node);renderNodes();} 
+        function deselectNode(){ selectedNodeId=null;deselectInspector();renderNodes();} 
+        function deselectInspector(){ nodeInspectorSection.classList.add("hidden");nodeBuilderSection.classList.remove("hidden");inspectorNodeName.value="";inspectorNodeImageURL.value="";inspectorInputsContainer.innerHTML="";inspectorOutputsContainer.innerHTML="";inspectorNodeUnit.value="";inspectorPassiveRate.value=""; inspectorMaxCapacity.value = ""; inspectorSolarArrayFields.classList.add("hidden"); inspectorBatchDurationField.classList.add("hidden");} 
+        svg.on("click",deselectNode); 
+        function populateInspector(node){ inspectorNodeName.value=node.label;inspectorNodeImageURL.value=node.img||"";inspectorNodeCost.value=node.cost||0;inspectorProcessorFields.classList.add("hidden");inspectorResourceDisplayFields.classList.add("hidden");inspectorSolarArrayFields.classList.add("hidden"); inspectorBatchDurationField.classList.add("hidden"); if(node.type===NODE_TYPES.PROCESSOR){inspectorProcessorFields.classList.remove("hidden"); if(isBatchProcessor(node)) { inspectorBatchDurationField.classList.remove("hidden"); inspectorBatchDuration.value = node.batchDuration || 6;} inspectorInputsContainer.innerHTML="";inspectorOutputsContainer.innerHTML="";(node.config.inputs||[]).forEach(input=>addIOFieldToInspector('input',input));(node.config.outputs||[]).forEach(output=>addIOFieldToInspector('output',output));}else if(node.type===NODE_TYPES.RESOURCE_DISPLAY){inspectorResourceDisplayFields.classList.remove("hidden");inspectorNodeUnit.value=node.unit||"";inspectorPassiveRate.value=node.passiveGeneration===undefined?0:node.passiveGeneration; inspectorMaxCapacity.value = node.maxCapacity || ""; inspectorProgressColor.value = node.progressColor || '#6fa06c'; inspectorIsExternal.checked = node.isExternal || false;}else if(node.type===NODE_TYPES.SOLAR_ARRAY){inspectorSolarArrayFields.classList.remove("hidden");inspectorRatedOutput.value=node.ratedOutput;inspectorCurrentOutput.textContent=`${node.currentOutput.toFixed(2)} kW`;}} 
+        
+        function addIOFieldToInspector(type, data = {}) {
+            inspectorIoItemIdCounter++;
+            const container = type === 'input' ? inspectorInputsContainer : inspectorOutputsContainer;
+            const div = document.createElement("div");
+            div.className = 'io-item';
+            div.id = `inspector-io-${inspectorIoItemIdCounter}`;
+            
+            let resOptsHTML = "";
+            for (const key in RESOURCE_TYPES) {
+                resOptsHTML += `<option value="${RESOURCE_TYPES[key]}" ${data.resourceType === RESOURCE_TYPES[key] ? 'selected' : ''}>${RESOURCE_TYPES[key]}</option>`;
+            }
+            
+            div.dataset.originalPortId = data.portId || '';
+            
+            // Add color picker for outputs with default color
+            const colorPickerHTML = type === 'output' ? 
+                `<label>Output Color: <input type="color" name="io_color" value="${data.color || RESOURCE_COLORS[data.resourceType] || '#808080'}"></label>` : '';
+            
+            div.innerHTML = `
+                <label>Port Name: <input type="text" name="io_name" value="${data.name || ''}" placeholder="Port Name"></label>
+                <label>Resource Type: <select name="io_resource">${resOptsHTML}</select></label>
+                <label>Rate (per hour/batch): <input type="number" name="io_rate" value="${data.rate || 1}" step="0.1"></label>
+                <label><input type="checkbox" name="io_is_batch" ${data.isBatchIO ? 'checked' : ''}> Batch I/O</label>
+                ${colorPickerHTML}
+                <button onclick="this.parentElement.remove()" style="width:auto;float:right;background-color:#c55;">X</button>`;
+            
+            container.appendChild(div);
+        }
+
+        document.getElementById("inspectorAddInput").addEventListener("click",()=>addIOFieldToInspector('input'));document.getElementById("inspectorAddOutput").addEventListener("click",()=>addIOFieldToInspector('output'));
+        document.getElementById("saveNodeChanges").addEventListener("click", () => {
+            if (!selectedNodeId) return;
+            const node = findNodeById(selectedNodeId);
+            if (!node) return;
+            
+            // Store current running state
+            const wasRunning = node.isRunning;
+            
+            node.label = inspectorNodeName.value || "Unnamed Node";
+            node.img = inspectorNodeImageURL.value.trim() || null;
+            node.cost = parseInt(inspectorNodeCost.value) || 0;
+            
+            if (node.type === NODE_TYPES.PROCESSOR) {
+                if (isBatchProcessor(node)) {
+                    node.batchDuration = parseInt(inspectorBatchDuration.value) || 6;
+                }
+                
+                const newInputs = [];
+                document.querySelectorAll("#inspectorInputsContainer .io-item").forEach(item => {
+                    newInputs.push({
+                        name: item.querySelector('[name="io_name"]').value || "Input",
+                        resourceType: item.querySelector('[name="io_resource"]').value,
+                        rate: parseFloat(item.querySelector('[name="io_rate"]').value) || 1,
+                        isBatchIO: item.querySelector('[name="io_is_batch"]').checked
+                    });
+                });
+                
+                const newOutputs = [];
+                document.querySelectorAll("#inspectorOutputsContainer .io-item").forEach(item => {
+                    newOutputs.push({
+                        name: item.querySelector('[name="io_name"]').value || "Output",
+                        resourceType: item.querySelector('[name="io_resource"]').value,
+                        rate: parseFloat(item.querySelector('[name="io_rate"]').value) || 1,
+                        isBatchIO: item.querySelector('[name="io_is_batch"]').checked,
+                        color: item.querySelector('[name="io_color"]')?.value || '#808080'
+                    });
+                });
+                
+                node.config.inputs = newInputs;
+                node.config.outputs = newOutputs;
+                regeneratePortsForNode(node);
+                
+                // Restore running state
+                node.isRunning = wasRunning;
+            } else if (node.type === NODE_TYPES.RESOURCE_DISPLAY) {
+                node.unit = inspectorNodeUnit.value || "Units";
+                node.passiveGeneration = parseFloat(inspectorPassiveRate.value) || 0;
+                node.maxCapacity = parseFloat(inspectorMaxCapacity.value) > 0 ? parseFloat(inspectorMaxCapacity.value) : null;
+                node.progressColor = inspectorProgressColor.value;
+                node.isExternal = inspectorIsExternal.checked;
+                if (node.maxCapacity && node.value > node.maxCapacity) node.value = node.maxCapacity;
+            } else if (node.type === NODE_TYPES.SOLAR_ARRAY) {
+                node.ratedOutput = parseFloat(inspectorRatedOutput.value) || 0;
+            }
+            render();
+        });
+        document.getElementById("cancelNodeChanges").addEventListener("click",deselectNode);
+        let dragOffsetX,dragOffsetY,tempConnectionData=null;function dragStarted(e,d){d3.select(this).raise().classed("active",true);dragOffsetX=e.x-d.x;dragOffsetY=e.y-d.y;}function dragged(e,d){d.x=e.x-dragOffsetX;d.y=e.y-dragOffsetY;render();}function dragEnded(e,d){d3.select(this).classed("active",false);}function getPortById(nodeId,portId){const n=nodes.find(n=>n.id===nodeId);return n?n.ports.find(p=>p.id===portId):null;}
+        function removeNode(nodeId) {
+            if (selectedNodeId === nodeId) {
+                deselectNode();
+            }
+            // Remove the node
+            nodes = nodes.filter(n => n.id !== nodeId);
+            // Remove all connections associated with this node
+            connections = connections.filter(c => c.sourceNodeId !== nodeId && c.targetNodeId !== nodeId);
+            // Force immediate render
+            render();
+        }
+        function toggleProcessor(procNode) {
+            // Toggle running state
+            procNode.isRunning = !procNode.isRunning;
+            
+            if (!procNode.isRunning) {
+                procNode.canProcessLastStep = false;
+                // Reset batch state if stopped
+                if (isBatchProcessor(procNode)) {
+                    procNode.isInBatch = false;
+                    procNode.batchTimeElapsed = 0;
+                    procNode.awaitingBatchInputs = false;
+                }
+            } else {
+                if (isBatchProcessor(procNode) && !procNode.isInBatch) {
+                    procNode.awaitingBatchInputs = true;
+                }
+            }
+            render();
+        }
+        function findNodeById(id){return nodes.find(n => n.id === id);}
+        
+        function simulateStep() {
+            if (isPlaying) { elapsedHours++; }
+            
+            // Update canvas background color based on time of day
+            const hourOfDay = elapsedHours % 24;
+            let brightness = 0;
+            if (hourOfDay >= 6 && hourOfDay < 18) {
+                const normalizedHour = (hourOfDay - 6) / 12;
+                brightness = Math.max(0, Math.sin(normalizedHour * Math.PI));
+            }
+            
+            // Calculate background color based on brightness
+            const baseColor = { r: 26, g: 43, b: 60 }; // #1a2b3c
+            const maxColor = { r: 173, g: 216, b: 230 }; // #add8e6 (light blue)
+            
+            const r = Math.round(baseColor.r + (maxColor.r - baseColor.r) * brightness);
+            const g = Math.round(baseColor.g + (maxColor.g - baseColor.g) * brightness);
+            const b = Math.round(baseColor.b + (maxColor.b - baseColor.b) * brightness);
+            
+            // Update both the SVG and its container
+            const canvasContainer = document.getElementById('canvas-container');
+            const newColor = `rgb(${r}, ${g}, ${b})`;
+            d3.select('#simulationCanvas').style('background-color', newColor);
+            canvasContainer.style.backgroundColor = newColor;
+            
+            if (isPlaying) { 
+                nodes.forEach(n => { 
+                    if (n.type === NODE_TYPES.RESOURCE_DISPLAY && n.passiveGeneration !== undefined && n.passiveGeneration !== 0) { 
+                        let amountToAdd = n.passiveGeneration; 
+                        if (n.maxCapacity != null) { 
+                            const roomLeft = n.maxCapacity - n.value; 
+                            if (n.passiveGeneration > 0) amountToAdd = Math.min(amountToAdd, roomLeft); 
+                        } 
+                        n.value += amountToAdd; 
+                        if (n.value < 0 && !n.isSource && !n.isExternal) n.value = 0; 
+                        if (n.maxCapacity != null) n.value = Math.min(n.value, n.maxCapacity); 
+                    }
+                }); 
+            }
+            
+            nodes.filter(n => n.type === NODE_TYPES.SOLAR_ARRAY).forEach(solarNode => {
+                const hourOfDay = elapsedHours % 24;
+                let sunFactor = 0;
+                if (hourOfDay >= 6 && hourOfDay < 18) {
+                    const normalizedHour = (hourOfDay - 6) / 12;
+                    sunFactor = Math.max(0, Math.sin(normalizedHour * Math.PI));
+                }
+                solarNode.currentOutput = solarNode.ratedOutput * sunFactor;
+                solarNode.canProcessLastStep = solarNode.currentOutput > 0.001 && isPlaying;
+                
+                if (isPlaying && solarNode.currentOutput > 0) {
+                    const energyGeneratedThisHour = solarNode.currentOutput;
+                    connections.filter(c => c.sourceNodeId === solarNode.id && solarNode.ports.find(p => p.id === c.sourcePortId))
+                        .forEach(conn => {
+                            const targetNode = findNodeById(conn.targetNodeId);
+                            if (targetNode && targetNode.type === NODE_TYPES.RESOURCE_DISPLAY && targetNode.resourceType === RESOURCE_TYPES.POWER) {
+                                const targetPort = targetNode.ports.find(p => p.id === conn.targetPortId);
+                                if (targetPort && targetPort.type === 'input') {
+                                    let amountToAdd = energyGeneratedThisHour;
+                                    if (targetNode.maxCapacity != null) {
+                                        const roomLeft = targetNode.maxCapacity - targetNode.value;
+                                        amountToAdd = Math.max(0, Math.min(amountToAdd, roomLeft));
+                                    }
+                                    targetNode.value += amountToAdd;
+                                }
+                            }
+                        });
+                }
+                if (solarNode.config && solarNode.config.outputs && solarNode.config.outputs.length > 0) {
+                    solarNode.config.outputs[0].rate = solarNode.currentOutput;
+                }
+            });
+
+            if (isPlaying) {
+                nodes.filter(n => n.type === NODE_TYPES.PROCESSOR).forEach(procNode => { 
+                    procNode.canProcessLastStep = false; 
+                    if (!procNode.isRunning) return; 
+
+                    let hasContinuousPower = true;
+                    const continuousPowerDef = procNode.config.inputs.find(inp => inp.resourceType === RESOURCE_TYPES.POWER && !inp.isBatchIO);
+                    if (continuousPowerDef) {
+                        const powerConn = connections.find(c => c.targetNodeId === procNode.id && c.targetPortId === continuousPowerDef.portId);
+                        if (!powerConn) { hasContinuousPower = false; }
+                        else {
+                            const powerSrc = findNodeById(powerConn.sourceNodeId);
+                            if (!powerSrc || (powerSrc.type === NODE_TYPES.RESOURCE_DISPLAY && powerSrc.value < continuousPowerDef.rate && !powerSrc.isExternal) || (powerSrc.type === NODE_TYPES.SOLAR_ARRAY && powerSrc.currentOutput < continuousPowerDef.rate)) {
+                                hasContinuousPower = false;
+                            }
+                        }
+                    }
+                    if (!hasContinuousPower) { procNode.isRunning = false; procNode.canProcessLastStep = false; return; }
+
+                    // Consume continuous power if available
+                    if (continuousPowerDef && hasContinuousPower) {
+                        const powerConn = connections.find(c => c.targetNodeId === procNode.id && c.targetPortId === continuousPowerDef.portId);
+                        const powerSrc = findNodeById(powerConn.sourceNodeId);
+                        if (powerSrc.type === NODE_TYPES.RESOURCE_DISPLAY) {
+                            powerSrc.value -= continuousPowerDef.rate;
+                            if (!powerSrc.isExternal && powerSrc.value < 0) powerSrc.value = 0;
+                        }
+                        procNode.canProcessLastStep = true;
+                    } else if (!continuousPowerDef) {
+                        procNode.canProcessLastStep = true;
+                    }
+
+                    const isCurrentProcessorBatchType = isBatchProcessor(procNode);
+
+                    if (isCurrentProcessorBatchType) {
+                        if (!procNode.isInBatch) {
+                            procNode.awaitingBatchInputs = true;
+                            let allBatchInputsAvailable = true;
+                            const batchInputs = procNode.config.inputs.filter(inp => inp.isBatchIO);
+                            for (const batchInputDef of batchInputs) {
+                                const conn = connections.find(c => c.targetNodeId === procNode.id && c.targetPortId === batchInputDef.portId);
+                                if (!conn) { allBatchInputsAvailable = false; break; }
+                                const srcNode = findNodeById(conn.sourceNodeId);
+                                if (!srcNode || (srcNode.value < batchInputDef.rate && !srcNode.isExternal)) { allBatchInputsAvailable = false; break; }
+                            }
+
+                            if (allBatchInputsAvailable && batchInputs.length > 0) {
+                                batchInputs.forEach(batchInputDef => {
+                                    const conn = connections.find(c => c.targetNodeId === procNode.id && c.targetPortId === batchInputDef.portId);
+                                    const srcNode = findNodeById(conn.sourceNodeId);
+                                    srcNode.value -= batchInputDef.rate;
+                                    if (!srcNode.isExternal && srcNode.value < 0) srcNode.value = 0;
+                                });
+                                procNode.isInBatch = true;
+                                procNode.awaitingBatchInputs = false;
+                                procNode.batchTimeElapsed = 0;
+                                procNode.canProcessLastStep = true;
+                            } else if (batchInputs.length > 0) {
+                                procNode.canProcessLastStep = false;
+                            }
+                        }
+
+                        if (procNode.isInBatch) { // Process active batch
+                            procNode.canProcessLastStep = true; // If in batch and has power, it's processing
+                             // Produce continuous outputs
+                            procNode.config.outputs.filter(out => !out.isBatchIO).forEach(outputDef => {
+                                connections.filter(c => c.sourceNodeId === procNode.id && c.sourcePortId === outputDef.portId)
+                                    .forEach(conn => {
+                                        const tgtNode = findNodeById(conn.targetNodeId);
+                                        if (tgtNode && tgtNode.type === NODE_TYPES.RESOURCE_DISPLAY && tgtNode.resourceType === outputDef.resourceType) {
+                                            let amountToAdd = outputDef.rate;
+                                            if (tgtNode.maxCapacity != null) {
+                                                const roomLeft = tgtNode.maxCapacity - tgtNode.value;
+                                                amountToAdd = Math.max(0, Math.min(amountToAdd, roomLeft));
+                                            }
+                                            tgtNode.value += amountToAdd;
+                                        }
+                                    });
+                            });
+                            
+                            procNode.batchTimeElapsed++;
+                            if (procNode.batchTimeElapsed >= procNode.batchDuration) {
+                                // Produce batch outputs
+                                procNode.config.outputs.filter(out => out.isBatchIO).forEach(outputDef => {
+                                    connections.filter(c => c.sourceNodeId === procNode.id && c.sourcePortId === outputDef.portId)
+                                        .forEach(conn => {
+                                            const tgtNode = findNodeById(conn.targetNodeId);
+                                            if (tgtNode && tgtNode.type === NODE_TYPES.RESOURCE_DISPLAY && tgtNode.resourceType === outputDef.resourceType) {
+                                                let amountToAdd = outputDef.rate;
+                                                if (tgtNode.maxCapacity != null) {
+                                                    const roomLeft = tgtNode.maxCapacity - tgtNode.value;
+                                                    amountToAdd = Math.max(0, Math.min(amountToAdd, roomLeft));
+                                                }
+                                                tgtNode.value += amountToAdd;
+                                            }
+                                        });
+                                });
+                                procNode.isInBatch = false;
+                                procNode.batchTimeElapsed = 0;
+                                procNode.isRunning = false; // Batch complete, turn off
+                                procNode.awaitingBatchInputs = false;
+                            }
+                        }
+                    } else { // Standard continuous processor
+                        let canProcessContinuousInputs = true;
+                        for (const inputDef of procNode.config.inputs.filter(inp => !inp.isBatchIO)) {
+                            const conn = connections.find(c => c.targetNodeId === procNode.id && c.targetPortId === inputDef.portId);
+                            if (!conn) { canProcessContinuousInputs = false; break; }
+                            const srcNode = findNodeById(conn.sourceNodeId);
+                            if (!srcNode || srcNode.resourceType !== inputDef.resourceType) { canProcessContinuousInputs = false; break; }
+                            if (srcNode.type === NODE_TYPES.RESOURCE_DISPLAY) {
+                                if (!srcNode.isSource && srcNode.value < inputDef.rate && !srcNode.isExternal) { canProcessContinuousInputs = false; break; }
+                            } else if (srcNode.type === NODE_TYPES.SOLAR_ARRAY && srcNode.currentOutput < inputDef.rate) {
+                                canProcessContinuousInputs = false;
+                                break;
+                            }
+                        }
+                        
+                        if (canProcessContinuousInputs) {
+                            procNode.canProcessLastStep = true;
+                            procNode.config.inputs.filter(inp => !inp.isBatchIO).forEach(inputDef => {
+                                const conn = connections.find(c => c.targetNodeId === procNode.id && c.targetPortId === inputDef.portId);
+                                const srcNode = findNodeById(conn.sourceNodeId);
+                                if (srcNode.type === NODE_TYPES.RESOURCE_DISPLAY) {
+                                    srcNode.value -= inputDef.rate;
+                                    if (!srcNode.isSource && !srcNode.isExternal && srcNode.value < 0) srcNode.value = 0;
+                                }
+                            });
+                            procNode.config.outputs.filter(out => !out.isBatchIO).forEach(outputDef => {
+                                connections.filter(c => c.sourceNodeId === procNode.id && c.sourcePortId === outputDef.portId)
+                                    .forEach(conn => {
+                                        const tgtNode = findNodeById(conn.targetNodeId);
+                                        if (tgtNode && tgtNode.type === NODE_TYPES.RESOURCE_DISPLAY && tgtNode.resourceType === outputDef.resourceType) {
+                                            let amountToAdd = outputDef.rate;
+                                            if (tgtNode.maxCapacity != null) {
+                                                const roomLeft = tgtNode.maxCapacity - tgtNode.value;
+                                                amountToAdd = Math.max(0, Math.min(amountToAdd, roomLeft));
+                                            }
+                                            tgtNode.value += amountToAdd;
+                                        }
+                                    });
+                            });
+                        } else {
+                            procNode.canProcessLastStep = false;
+                            procNode.isRunning = false; // Auto-stop if continuous inputs fail
+                        }
+                    }
+                    if (!procNode.canProcessLastStep && procNode.isRunning && !procNode.awaitingBatchInputs) {
+                        procNode.isRunning = false;
+                    }
+                });
+            }
+            render();
+        }
+        
+        const playPauseBtn=document.getElementById("playPauseButton"); const speedSlider=document.getElementById("speedSlider"); const speedLabel=document.querySelector(".speed-label"); function setSimulationSpeed(){ currentSimSpeedMs = baseSimSpeedMs / (parseInt(speedSlider.value) / 1000); currentSimSpeedMs = Math.max(50, Math.min(4000, currentSimSpeedMs)); let multiplier = baseSimSpeedMs / currentSimSpeedMs; speedLabel.textContent = `${multiplier.toFixed(1)}x`; if(isPlaying){ if(simulationInterval) clearInterval(simulationInterval); simulationInterval=setInterval(simulateStep,currentSimSpeedMs);} } speedSlider.addEventListener("input",setSimulationSpeed); 
+        function playPauseSimulation(){ isPlaying=!isPlaying; playPauseBtn.innerHTML=isPlaying?"&#10074;&#10074;":"&#9658;"; if(isPlaying){ if(simulationInterval) clearInterval(simulationInterval); simulationInterval=setInterval(simulateStep,currentSimSpeedMs); } else { clearInterval(simulationInterval); simulationInterval = null; render(); } } 
+        playPauseBtn.addEventListener("click",playPauseSimulation);
+        function updateTimeDisplay(){ const day = Math.floor(elapsedHours / 24) + 1; const hourInDay = elapsedHours % 24; d3.select(".time-display").text(`${elapsedHours} total hours (Day ${day}, ${String(hourInDay).padStart(2,'0')}:00)`); } 
+        document.getElementById("addPlasticTrash").addEventListener("click",()=>{nodes.push(createNode(NODE_TYPES.RESOURCE_DISPLAY, {subType: 'PlasticTrash'}));render();}); document.getElementById("addShredder").addEventListener("click",()=>{nodes.push(createNode(NODE_TYPES.PROCESSOR, {subType: 'Shredder'}));render();}); document.getElementById("addSolarArray").addEventListener("click",()=>{nodes.push(createNode(NODE_TYPES.SOLAR_ARRAY));render();}); document.getElementById("addBiocharReactor").addEventListener("click",()=>{nodes.push(createNode(NODE_TYPES.PROCESSOR, {subType: 'BiocharReactor'}));render();}); document.getElementById("addPlasticFlakes").addEventListener("click",()=>{nodes.push(createNode(NODE_TYPES.RESOURCE_DISPLAY, {subType: 'PlasticFlakes'}));render();}); document.getElementById("addTrashPrinter").addEventListener("click",()=>{nodes.push(createNode(NODE_TYPES.PROCESSOR, {subType: 'TrashPrinter'}));render();}); document.getElementById("addWindTurbines").addEventListener("click",()=>{nodes.push(createNode(NODE_TYPES.RESOURCE_DISPLAY, {subType: 'WindTurbines'}));render();}); document.getElementById("addBatteryBank").addEventListener("click",()=>{nodes.push(createNode(NODE_TYPES.RESOURCE_DISPLAY, {subType: 'BatteryBank'}));render();}); document.getElementById("addBiomass").addEventListener("click",()=>{nodes.push(createNode(NODE_TYPES.RESOURCE_DISPLAY, {subType: 'Biomass'}));render();}); document.getElementById("addPoopGas").addEventListener("click",()=>{nodes.push(createNode(NODE_TYPES.RESOURCE_DISPLAY, {subType: 'PoopGas'}));render();}); document.getElementById("addBiochar").addEventListener("click",()=>{nodes.push(createNode(NODE_TYPES.RESOURCE_DISPLAY, {subType: 'Biochar'}));render();});
+        const customNodeImageURL=document.getElementById("customNodeImageURL");const customInputsContainer=document.getElementById("customInputsContainer");const customOutputsContainer=document.getElementById("customOutputsContainer"); const customBatchDurationInput = document.getElementById("customBatchDuration"); function addCustomIOField(type){inspectorIoItemIdCounter++;const container=type==='input'?customInputsContainer:customOutputsContainer;const div=document.createElement("div");div.className='io-item';div.id=`custom-io-${inspectorIoItemIdCounter}`;let resOptsHTML="";for(const key in RESOURCE_TYPES){resOptsHTML+=`<option value="${RESOURCE_TYPES[key]}">${RESOURCE_TYPES[key]}</option>`;}div.innerHTML=`<label>Port Name: <input type="text" name="io_name" placeholder="e.g., Raw Material"></label><label>Resource Type: <select name="io_resource">${resOptsHTML}</select></label><label>Rate (per hour/batch): <input type="number" name="io_rate" value="1" step="0.1"></label><label><input type="checkbox" name="io_is_batch"> Batch I/O</label><button onclick="this.parentElement.remove()" style="width:auto;float:right;background-color:#c55;">X</button>`;container.appendChild(div);}document.getElementById("addCustomInput").addEventListener("click",()=>addCustomIOField('input'));document.getElementById("addCustomOutput").addEventListener("click",()=>addCustomIOField('output'));document.getElementById("createCustomNodeInstance").addEventListener("click",()=>{const nodeName=document.getElementById("customNodeName").value||"Custom Processor";const imgURL=customNodeImageURL.value.trim()||null;const batchDuration = parseInt(customBatchDurationInput.value) || 6; const cfg={inputs:[],outputs:[]};document.querySelectorAll("#customInputsContainer .io-item").forEach(item=>{cfg.inputs.push({name:item.querySelector('[name="io_name"]').value||"Input",resourceType:item.querySelector('[name="io_resource"]').value,rate:parseFloat(item.querySelector('[name="io_rate"]').value)||1, isBatchIO: item.querySelector('[name="io_is_batch"]').checked});});document.querySelectorAll("#customOutputsContainer .io-item").forEach(item=>{cfg.outputs.push({name:item.querySelector('[name="io_name"]').value||"Output",resourceType:item.querySelector('[name="io_resource"]').value,rate:parseFloat(item.querySelector('[name="io_rate"]').value)||1, isBatchIO: item.querySelector('[name="io_is_batch"]').checked});});const newNode=createNode(NODE_TYPES.PROCESSOR, {subType: 'CustomProcessor', label:nodeName,img:imgURL,config:cfg, batchDuration: batchDuration});if(newNode){nodes.push(newNode);render();}});
+        function setupInitialScene() {
+            updateSvgDimensions();
+            const initialNodeLayout = [
+                { type: NODE_TYPES.SOLAR_ARRAY, options: { x: -10, y: -150, label: 'SOLAR ARRAY', ratedOutput: 2.4 } },
+                { type: NODE_TYPES.RESOURCE_DISPLAY, options: { subType: 'BatteryBank', x: 357, y: -96, label: 'BATTERY BANK', maxCapacity: 10.8 } },
+                { type: NODE_TYPES.PROCESSOR, options: { subType: 'Shredder', x: 853, y: 106, label: 'SHREDDER' } },
+                { type: NODE_TYPES.RESOURCE_DISPLAY, options: { subType: 'PlasticFlakes', x: 1213, y: 216, label: 'PLASTIC FLAKES', maxCapacity: 50 } },
+                { type: NODE_TYPES.PROCESSOR, options: { subType: 'TrashPrinter', x: 1695, y: -38, label: 'TRASH PRINTER' } },
+                { type: NODE_TYPES.RESOURCE_DISPLAY, options: { subType: 'WindTurbines', x: 2145, y: -27, label: 'WIND TURBINES' } },
+                { type: NODE_TYPES.PROCESSOR, options: { subType: 'BiocharReactor', x: 849, y: 502, label: 'BIOCHAR REACTOR' } },
+                { type: NODE_TYPES.RESOURCE_DISPLAY, options: { subType: 'PoopGas', x: 1696, y: 346, label: 'POOP-GAS', maxCapacity: 10000 } },
+                { type: NODE_TYPES.RESOURCE_DISPLAY, options: { subType: 'Biochar', x: 1995, y: 559, label: 'BIOCHAR', maxCapacity: 50 } }
+            ];
+
+            initialNodeLayout.forEach(data => nodes.push(createNode(data.type, data.options)));
+
+            // Create initial connections
+            const initialConnectionDefs = [
+                { sourceLabel: 'SOLAR ARRAY', sourcePortName: 'Power Out', targetLabel: 'BATTERY BANK', targetPortName: 'Charge In' },
+                { sourceLabel: 'BATTERY BANK', sourcePortName: 'Power Out', targetLabel: 'SHREDDER', targetPortName: 'POWER' },
+                { sourceLabel: 'BATTERY BANK', sourcePortName: 'Power Out', targetLabel: 'TRASH PRINTER', targetPortName: 'POWER' },
+                { sourceLabel: 'BATTERY BANK', sourcePortName: 'Power Out', targetLabel: 'BIOCHAR REACTOR', targetPortName: 'POWER' },
+                { sourceLabel: 'SHREDDER', sourcePortName: 'SHREDDED PLASTIC', targetLabel: 'PLASTIC FLAKES', targetPortName: 'Flakes In' },
+                { sourceLabel: 'PLASTIC FLAKES', sourcePortName: 'Flakes Out', targetLabel: 'TRASH PRINTER', targetPortName: 'SHREDDED PLASTIC' },
+                { sourceLabel: 'TRASH PRINTER', sourcePortName: 'WIND TURBINES', targetLabel: 'WIND TURBINES', targetPortName: 'Turbines In' },
+                { sourceLabel: 'BIOCHAR REACTOR', sourcePortName: 'POOP-GAS', targetLabel: 'POOP-GAS', targetPortName: 'Gas In' },
+                { sourceLabel: 'BIOCHAR REACTOR', sourcePortName: 'BIOCHAR', targetLabel: 'BIOCHAR', targetPortName: 'Biochar In' }
+            ];
+
+            initialConnectionDefs.forEach(def => {
+                const sourceNode = nodes.find(n => n.label === def.sourceLabel);
+                const targetNode = nodes.find(n => n.label === def.targetLabel);
+                if (sourceNode && targetNode) {
+                    const sourcePort = sourceNode.ports.find(p => p.name === def.sourcePortName);
+                    const targetPort = targetNode.ports.find(p => p.name === def.targetPortName);
+                    if (sourcePort && targetPort) {
+                        connectionIdCounter++;
+                        connections.push({
+                            id: `conn-${connectionIdCounter}`,
+                            sourceNodeId: sourceNode.id,
+                            sourcePortId: sourcePort.id,
+                            targetNodeId: targetNode.id,
+                            targetPortId: targetPort.id
+                        });
+                    }
+                }
+            });
+
+            speedSlider.value = "1000";
+            setSimulationSpeed();
+            requestAnimationFrame(() => {
+                requestAnimationFrame(render);
+            });
+        }
+        document.addEventListener("DOMContentLoaded", () => { updateSvgDimensions(); window.addEventListener('resize', () => { updateSvgDimensions(); render(); }); setupInitialScene(); });
+
+        function saveSystem() {
+            const systemState = {
+                nodes: nodes.map(node => ({
+                    ...node,
+                    // Remove any circular references or functions
+                    ports: node.ports.map(port => ({
+                        id: port.id,
+                        type: port.type,
+                        resourceType: port.resourceType,
+                        name: port.name,
+                        side: port.side,
+                        yOffsetRatio: port.yOffsetRatio
+                    }))
+                })),
+                connections: connections,
+                elapsedHours: elapsedHours,
+                nodeIdCounter: nodeIdCounter,
+                connectionIdCounter: connectionIdCounter
+            };
+
+            const saveData = JSON.stringify(systemState);
+            const blob = new Blob([saveData], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `ecosystem_simulation_${new Date().toISOString().slice(0,19).replace(/[:]/g, '-')}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function loadSystem() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json';
+            
+            input.onchange = e => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = event => {
+                    try {
+                        const systemState = JSON.parse(event.target.result);
+                        
+                        // Reset current state
+                        nodes = [];
+                        connections = [];
+                        
+                        // Restore nodes
+                        nodes = systemState.nodes.map(node => ({
+                            ...node,
+                            // Restore any necessary properties that might have been lost in serialization
+                            canProcessLastStep: false,
+                            isRunning: false,
+                            batchTimeElapsed: 0,
+                            isInBatch: false,
+                            awaitingBatchInputs: false
+                        }));
+                        
+                        // Restore connections
+                        connections = systemState.connections;
+                        
+                        // Restore counters
+                        nodeIdCounter = systemState.nodeIdCounter;
+                        connectionIdCounter = systemState.connectionIdCounter;
+                        
+                        // Restore simulation time
+                        elapsedHours = systemState.elapsedHours;
+                        
+                        // Update UI
+                        render();
+                        updateTimeDisplay();
+                        
+                        // Stop simulation if it was running
+                        if (isPlaying) {
+                            playPauseSimulation();
+                        }
+                    } catch (error) {
+                        console.error('Error loading save file:', error);
+                        alert('Error loading save file. The file might be corrupted or incompatible.');
+                    }
+                };
+                reader.readAsText(file);
+            };
+            
+            input.click();
+        }
+
+        // Add event listeners for save/load buttons
+        document.getElementById('saveSystem').addEventListener('click', saveSystem);
+        document.getElementById('loadSystem').addEventListener('click', loadSystem);
+
+        function getDefaultUnitForResource(resourceType) {
+            switch(resourceType) {
+                case RESOURCE_TYPES.POWER: return 'kWh';
+                case RESOURCE_TYPES.PLASTIC: return 'kg';
+                case RESOURCE_TYPES.PLASTIC_FLAKES: return 'kg';
+                case RESOURCE_TYPES.WIND_TURBINES: return 'kg';
+                case RESOURCE_TYPES.BIOMASS: return 'kg';
+                case RESOURCE_TYPES.POOP_GAS: return 'L';
+                case RESOURCE_TYPES.BIOCHAR: return 'kg';
+                default: return 'Units';
+            }
+        }
+
+        function getDefaultCapacityForResource(resourceType) {
+            switch(resourceType) {
+                case RESOURCE_TYPES.POWER: return 10.8;
+                case RESOURCE_TYPES.PLASTIC: return 100;
+                case RESOURCE_TYPES.PLASTIC_FLAKES: return 50;
+                case RESOURCE_TYPES.WIND_TURBINES: return 50;
+                case RESOURCE_TYPES.BIOMASS: return 100;
+                case RESOURCE_TYPES.POOP_GAS: return 10000;
+                case RESOURCE_TYPES.BIOCHAR: return 50;
+                default: return 100;
+            }
+        }
+
+        // Add zoom control event listeners
+        document.getElementById('zoomIn').addEventListener('click', () => {
+            currentZoom = currentZoom.scale(1.5);
+            svg.call(zoom.transform, currentZoom);
+        });
+
+        document.getElementById('zoomOut').addEventListener('click', () => {
+            currentZoom = currentZoom.scale(0.75);
+            svg.call(zoom.transform, currentZoom);
+        });
+
+        document.getElementById('resetZoom').addEventListener('click', () => {
+            currentZoom = d3.zoomIdentity;
+            svg.call(zoom.transform, currentZoom);
+        });
+
+        // Add renderConnections function back
+        function renderConnections() {
+            const connectionGroups = zoomGroup.selectAll(".connection")
+                .data(connections, d => d.id);
+
+            // Remove old connections
+            connectionGroups.exit().remove();
+
+            // Add new connections
+            const newConnections = connectionGroups.enter()
+                .append("path")
+                .attr("class", d => {
+                    const sourceNode = findNodeById(d.sourceNodeId);
+                    const sourcePort = sourceNode.ports.find(p => p.id === d.sourcePortId);
+                    let resourceClass = 'default-connection';
+                    
+                    if (sourcePort) {
+                        switch(sourcePort.resourceType) {
+                            case RESOURCE_TYPES.POWER: resourceClass = 'power'; break;
+                            case RESOURCE_TYPES.PLASTIC: resourceClass = 'plastic'; break;
+                            case RESOURCE_TYPES.PLASTIC_FLAKES: resourceClass = 'plastic-flakes'; break;
+                            case RESOURCE_TYPES.WIND_TURBINES: resourceClass = 'wind-turbines'; break;
+                            case RESOURCE_TYPES.BIOMASS: resourceClass = 'biomass'; break;
+                            case RESOURCE_TYPES.POOP_GAS: resourceClass = 'poop-gas'; break;
+                            case RESOURCE_TYPES.BIOCHAR: resourceClass = 'biochar'; break;
+                        }
+                    }
+                    return `connection ${resourceClass}`;
+                })
+                .style("stroke", d => {
+                    const sourceNode = findNodeById(d.sourceNodeId);
+                    const sourcePort = sourceNode.ports.find(p => p.id === d.sourcePortId);
+                    return RESOURCE_COLORS[sourcePort?.resourceType] || '#808080';
+                })
+                .style("vector-effect", "non-scaling-stroke")
+                .style("cursor", "pointer")
+                .style("pointer-events", "stroke")  // Only make the stroke clickable, not the fill
+                .on("click", (e, d) => {
+                    e.stopPropagation();
+                    deleteConnection(d.id);
+                });
+
+            // Update all connections (both new and existing)
+            connectionGroups.merge(newConnections)
+                .attr("d", d => {
+                    const sn = findNodeById(d.sourceNodeId);
+                    const tn = findNodeById(d.targetNodeId);
+                    if (!sn || !tn) return "";
+                    
+                    const sp = sn.ports.find(p => p.id === d.sourcePortId);
+                    const tp = tn.ports.find(p => p.id === d.targetPortId);
+                    if (!sp || !tp) return "";
+                    
+                    const spos = getAbsPortPosition(sn, sp);
+                    const epos = getAbsPortPosition(tn, tp);
+                    
+                    const dx = epos.x - spos.x;
+                    const offset = Math.max(50, Math.abs(dx) * 0.3);
+                    
+                    const path = d3.path();
+                    path.moveTo(spos.x, spos.y);
+                    path.bezierCurveTo(
+                        spos.x + (sp.side === 'right' ? offset : -offset),
+                        spos.y,
+                        epos.x + (tp.side === 'left' ? -offset : offset),
+                        epos.y,
+                        epos.x,
+                        epos.y
+                    );
+                    
+                    return path.toString();
+                })
+                .classed("is-flowing", d => {
+                    // Only animate if simulation is running
+                    if (!isPlaying) return false;
+
+                    const sourceNode = findNodeById(d.sourceNodeId);
+                    const targetNode = findNodeById(d.targetNodeId);
+                    
+                    // Check if source is a processor that's running
+                    if (sourceNode.type === NODE_TYPES.PROCESSOR && sourceNode.isRunning) {
+                        return true;
+                    }
+                    
+                    // Check if source is a solar array that's producing power
+                    if (sourceNode.type === NODE_TYPES.SOLAR_ARRAY && sourceNode.currentOutput > 0.001) {
+                        return true;
+                    }
+                    
+                    // Check if target is a processor that's running and consuming resources
+                    if (targetNode.type === NODE_TYPES.PROCESSOR && targetNode.isRunning && targetNode.canProcessLastStep) {
+                        return true;
+                    }
+                    
+                    return false;
+                });
+        }
+
+        // Consolidated view management
+        const customButton = document.getElementById('custom-node-builder-button');
+        const sidebar = document.getElementById('sidebar');
+        const moduleLibrary = document.getElementById('module-library');
+
+        function showBuilderView() {
+            sidebar.classList.add('visible');
+            moduleLibrary.style.display = 'none';
+            customButton.textContent = 'Back to Library';
+            customButton.classList.add('back-to-library');
+            nodeBuilderSection.classList.remove('hidden');
+            nodeInspectorSection.classList.add('hidden');
+        }
+
+        function showLibraryView() {
+            sidebar.classList.remove('visible');
+            moduleLibrary.style.display = 'block';
+            customButton.textContent = 'Create Custom Module';
+            customButton.classList.remove('back-to-library');
+            nodeBuilderSection.classList.add('hidden');
+            nodeInspectorSection.classList.add('hidden');
+        }
+
+        function showInspectorView() {
+            sidebar.classList.add('visible');
+            moduleLibrary.style.display = 'none';
+            customButton.textContent = 'Back to Library';
+            customButton.classList.add('back-to-library');
+            nodeBuilderSection.classList.add('hidden');
+            nodeInspectorSection.classList.remove('hidden');
+        }
+
+        // Update the custom node builder button click handler
+        customButton.addEventListener('click', () => {
+            if (customButton.classList.contains('back-to-library')) {
+                showLibraryView();
+            } else {
+                showBuilderView();
+            }
+        });
+
+        // Update the cancel button to also return to library view
+        document.getElementById('cancelNodeChanges').addEventListener('click', () => {
+            showLibraryView();
+            deselectNode();
+        });
+
+        // Update click-outside handler
+        document.addEventListener('click', (e) => {
+            if (!sidebar.contains(e.target) && 
+                !customButton.contains(e.target) && 
+                sidebar.classList.contains('visible')) {
+                showLibraryView();
+            }
+        });
+
+        // Update the selectNode function to show inspector view
+        function selectNode(nodeId) {
+            const node = findNodeById(nodeId);
+            if (!node) {
+                deselectNode();
+                return;
+            }
+            selectedNodeId = nodeId;
+            showInspectorView();
+            populateInspector(node);
+            renderNodes();
+        }
+
+        // Update the deselectNode function to show library view
+        function deselectNode() {
+            selectedNodeId = null;
+            deselectInspector();
+            showLibraryView();
+            renderNodes();
+        }
+
+        // Update the deselectInspector function
+        function deselectInspector() {
+            nodeInspectorSection.classList.add('hidden');
+            nodeBuilderSection.classList.add('hidden');
+            inspectorNodeName.value = "";
+            inspectorNodeImageURL.value = "";
+            inspectorNodeCost.value = "";
+            inspectorInputsContainer.innerHTML = "";
+            inspectorOutputsContainer.innerHTML = "";
+            inspectorNodeUnit.value = "";
+            inspectorPassiveRate.value = "";
+            inspectorMaxCapacity.value = "";
+            inspectorSolarArrayFields.classList.add('hidden');
+            inspectorBatchDurationField.classList.add('hidden');
+        }
+
+        // Update the svg click handler to properly handle deselection
+        svg.on("click", (e) => {
+            if (e.target === svg.node()) {
+                deselectNode();
+            }
+        });
+
+        // Remove any conflicting event listeners
+        const oldCustomButtonHandler = document.getElementById('custom-node-builder-button').onclick;
+        if (oldCustomButtonHandler) {
+            document.getElementById('custom-node-builder-button').onclick = null;
+        }
+
+        // Add these functions after the existing save/load functions
+        function saveCustomModule() {
+            const moduleName = document.getElementById("customNodeName").value || "Custom Module";
+            const imgURL = customNodeImageURL.value.trim() || null;
+            const batchDuration = parseInt(customBatchDurationInput.value) || 6;
+            
+            const moduleDefinition = {
+                name: moduleName,
+                img: imgURL,
+                batchDuration: batchDuration,
+                inputs: [],
+                outputs: []
+            };
+
+            // Collect inputs
+            document.querySelectorAll("#customInputsContainer .io-item").forEach(item => {
+                moduleDefinition.inputs.push({
+                    name: item.querySelector('[name="io_name"]').value || "Input",
+                    resourceType: item.querySelector('[name="io_resource"]').value,
+                    rate: parseFloat(item.querySelector('[name="io_rate"]').value) || 1,
+                    isBatchIO: item.querySelector('[name="io_is_batch"]').checked
+                });
+            });
+
+            // Collect outputs
+            document.querySelectorAll("#customOutputsContainer .io-item").forEach(item => {
+                moduleDefinition.outputs.push({
+                    name: item.querySelector('[name="io_name"]').value || "Output",
+                    resourceType: item.querySelector('[name="io_resource"]').value,
+                    rate: parseFloat(item.querySelector('[name="io_rate"]').value) || 1,
+                    isBatchIO: item.querySelector('[name="io_is_batch"]').checked
+                });
+            });
+
+            // Create and download the JSON file
+            const saveData = JSON.stringify(moduleDefinition, null, 2);
+            const blob = new Blob([saveData], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `custom_module_${moduleName.toLowerCase().replace(/\s+/g, '_')}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function loadCustomModule() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json';
+            
+            input.onchange = e => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = event => {
+                    try {
+                        const moduleDefinition = JSON.parse(event.target.result);
+                        
+                        // Clear existing fields
+                        document.getElementById("customNodeName").value = moduleDefinition.name || "";
+                        customNodeImageURL.value = moduleDefinition.img || "";
+                        customBatchDurationInput.value = moduleDefinition.batchDuration || 6;
+                        
+                        // Clear existing I/O fields
+                        customInputsContainer.innerHTML = "";
+                        customOutputsContainer.innerHTML = "";
+                        
+                        // Add inputs
+                        moduleDefinition.inputs.forEach(input => {
+                            const div = document.createElement("div");
+                            div.className = 'io-item';
+                            div.id = `custom-io-${inspectorIoItemIdCounter++}`;
+                            
+                            let resOptsHTML = "";
+                            for(const key in RESOURCE_TYPES) {
+                                resOptsHTML += `<option value="${RESOURCE_TYPES[key]}" ${input.resourceType === RESOURCE_TYPES[key] ? 'selected' : ''}>${RESOURCE_TYPES[key]}</option>`;
+                            }
+                            
+                            div.innerHTML = `
+                                <label>Port Name: <input type="text" name="io_name" value="${input.name}" placeholder="e.g., Raw Material"></label>
+                                <label>Resource Type: <select name="io_resource">${resOptsHTML}</select></label>
+                                <label>Rate (per hour/batch): <input type="number" name="io_rate" value="${input.rate}" step="0.1"></label>
+                                <label><input type="checkbox" name="io_is_batch" ${input.isBatchIO ? 'checked' : ''}> Batch I/O</label>
+                                <button onclick="this.parentElement.remove()" style="width:auto;float:right;background-color:#c55;">X</button>`;
+                            
+                            customInputsContainer.appendChild(div);
+                        });
+                        
+                        // Add outputs
+                        moduleDefinition.outputs.forEach(output => {
+                            const div = document.createElement("div");
+                            div.className = 'io-item';
+                            div.id = `custom-io-${inspectorIoItemIdCounter++}`;
+                            
+                            let resOptsHTML = "";
+                            for(const key in RESOURCE_TYPES) {
+                                resOptsHTML += `<option value="${RESOURCE_TYPES[key]}" ${output.resourceType === RESOURCE_TYPES[key] ? 'selected' : ''}>${RESOURCE_TYPES[key]}</option>`;
+                            }
+                            
+                            div.innerHTML = `
+                                <label>Port Name: <input type="text" name="io_name" value="${output.name}" placeholder="e.g., Processed Material"></label>
+                                <label>Resource Type: <select name="io_resource">${resOptsHTML}</select></label>
+                                <label>Rate (per hour/batch): <input type="number" name="io_rate" value="${output.rate}" step="0.1"></label>
+                                <label><input type="checkbox" name="io_is_batch" ${output.isBatchIO ? 'checked' : ''}> Batch I/O</label>
+                                <button onclick="this.parentElement.remove()" style="width:auto;float:right;background-color:#c55;">X</button>`;
+                            
+                            customOutputsContainer.appendChild(div);
+                        });
+                        
+                    } catch (error) {
+                        console.error('Error loading module file:', error);
+                        alert('Error loading module file. The file might be corrupted or incompatible.');
+                    }
+                };
+                reader.readAsText(file);
+            };
+            
+            input.click();
+        }
+
+        // Add buttons to the custom node builder section
+        document.getElementById("nodeBuilderSection").insertAdjacentHTML('beforeend', `
+            <div style="margin-top: 20px; display: flex; gap: 10px;">
+                <button id="saveCustomModule" style="flex: 1;">Save Module Template</button>
+                <button id="loadCustomModule" style="flex: 1;">Load Module Template</button>
+            </div>
+        `);
+
+        // Add event listeners for the new buttons
+        document.getElementById('saveCustomModule').addEventListener('click', saveCustomModule);
+        document.getElementById('loadCustomModule').addEventListener('click', loadCustomModule);
+
+        // ... existing code ...
+        function deleteConnection(connectionId) {
+            // Remove from connections array
+            connections = connections.filter(c => c.id !== connectionId);
+            // Force a re-render
+            render();
+        }
+
+        // Add function to calculate total cost
+        function calculateTotalCost() {
+            return nodes.reduce((total, node) => total + (node.cost || 0), 0);
+        }
+
+        // Add function to update cost display
+        function updateCostDisplay() {
+            const totalCost = calculateTotalCost();
+            document.getElementById('totalCost').textContent = totalCost.toLocaleString();
+        }
+
+        // Add these functions after the existing script content
+        function showModuleCreationMenu(event, portData) {
+            // Remove any existing menu
+            d3.selectAll('.popup-menu').remove();
+            
+            // Get compatible modules
+            const compatibleModules = [];
+            
+            // Check each processor type for compatible inputs
+            if (portData.resourceType === RESOURCE_TYPES.PLASTIC_FLAKES) {
+                compatibleModules.push({ name: 'Trash Printer', type: 'TrashPrinter' });
+            }
+            if (portData.resourceType === RESOURCE_TYPES.BIOMASS) {
+                compatibleModules.push({ name: 'Biochar Reactor', type: 'BiocharReactor' });
+            }
+            if (portData.resourceType === RESOURCE_TYPES.PLASTIC) {
+                compatibleModules.push({ name: 'Shredder', type: 'Shredder' });
+            }
+            
+            // Create popup menu
+            const menu = d3.select('body')
+                .append('div')
+                .attr('class', 'popup-menu')
+                .style('left', `${event.clientX}px`)
+                .style('top', `${event.clientY}px`);
+            
+            // Add compatible modules
+            compatibleModules.forEach(module => {
+                menu.append('div')
+                    .attr('class', 'popup-menu-item')
+                    .text(module.name)
+                    .on('click', () => {
+                        // Get the world position where the menu was clicked
+                        const worldPos = screenToWorld(event.clientX, event.clientY);
+                        
+                        // Create the new node
+                        const newNode = createNode(NODE_TYPES.PROCESSOR, { 
+                            subType: module.type,
+                            x: worldPos.x,
+                            y: worldPos.y
+                        });
+                        
+                        if (newNode) {
+                            // Add the node to the nodes array
+                            nodes.push(newNode);
+                            
+                            // Create connection
+                            connectionIdCounter++;
+                            const newConnection = {
+                                id: `conn-${connectionIdCounter}`,
+                                sourceNodeId: portData.parentNode.id,
+                                sourcePortId: portData.id,
+                                targetNodeId: newNode.id,
+                                targetPortId: newNode.ports.find(p => p.type === 'input' && p.resourceType === portData.resourceType).id
+                            };
+                            connections.push(newConnection);
+                            
+                            // Force immediate render
+                            requestAnimationFrame(() => {
+                                render();
+                            });
+                        }
+                        menu.remove();
+                    });
+            });
+            
+            // Add separator if there are compatible modules
+            if (compatibleModules.length > 0) {
+                menu.append('div')
+                    .attr('class', 'popup-menu-separator');
+            }
+            
+            // Add "Create Custom Module" option
+            menu.append('div')
+                .attr('class', 'popup-menu-item')
+                .text('Create Custom Module')
+                .on('click', () => {
+                    // Get the world position where the menu was clicked
+                    const worldPos = screenToWorld(event.clientX, event.clientY);
+                    
+                    // Create a new custom processor
+                    const newNode = createNode(NODE_TYPES.PROCESSOR, {
+                        subType: 'CustomProcessor',
+                        label: `Custom ${portData.resourceType} Processor`,
+                        x: worldPos.x,
+                        y: worldPos.y,
+                        config: {
+                            inputs: [{
+                                name: `${portData.resourceType} Input`,
+                                resourceType: portData.resourceType,
+                                rate: 1,
+                                isBatchIO: false
+                            }],
+                            outputs: []
+                        }
+                    });
+                    
+                    if (newNode) {
+                        // Add the node to the nodes array
+                        nodes.push(newNode);
+                        
+                        // Create connection
+                        connectionIdCounter++;
+                        const newConnection = {
+                            id: `conn-${connectionIdCounter}`,
+                            sourceNodeId: portData.parentNode.id,
+                            sourcePortId: portData.id,
+                            targetNodeId: newNode.id,
+                            targetPortId: newNode.ports.find(p => p.type === 'input' && p.resourceType === portData.resourceType).id
+                        };
+                        connections.push(newConnection);
+                        
+                        // Force immediate render
+                        requestAnimationFrame(() => {
+                            render();
+                            // Open the inspector for the new node
+                            selectNode(newNode.id);
+                        });
+                    }
+                    menu.remove();
+                });
+            
+            // Close menu when clicking outside
+            d3.select('body').on('click.popup', () => {
+                menu.remove();
+                d3.select('body').on('click.popup', null);
+            });
+        }
+
+        // Update createCustomModuleFromPort to use the same pattern
+        function createCustomModuleFromPort(portData, event) {
+            // Get the world position where the menu was clicked
+            const worldPos = screenToWorld(event.clientX, event.clientY);
+            
+            // Create a new custom processor
+            const newNode = createNode(NODE_TYPES.PROCESSOR, {
+                subType: 'CustomProcessor',
+                label: `Custom ${portData.resourceType} Processor`,
+                x: worldPos.x,
+                y: worldPos.y,
+                config: {
+                    inputs: [{
+                        name: `${portData.resourceType} Input`,
+                        resourceType: portData.resourceType,
+                        rate: 1,
+                        isBatchIO: false
+                    }],
+                    outputs: []
+                }
+            });
+            
+            if (newNode) {
+                // Add the node to the nodes array
+                nodes.push(newNode);
+                
+                // Create connection
+                connectionIdCounter++;
+                const newConnection = {
+                    id: `conn-${connectionIdCounter}`,
+                    sourceNodeId: portData.parentNode.id,
+                    sourcePortId: portData.id,
+                    targetNodeId: newNode.id,
+                    targetPortId: newNode.ports.find(p => p.type === 'input' && p.resourceType === portData.resourceType).id
+                };
+                connections.push(newConnection);
+                
+                // Force immediate render
+                requestAnimationFrame(() => {
+                    render();
+                    // Open the inspector for the new node
+                    selectNode(newNode.id);
+                });
+            }
+        }
+
+        // Modify the endConnection function in startConnection
+        function endConnection(e) {
+            // Clean up event listeners
+            svg.on("mousemove.connection touchmove.connection", null)
+               .on("mouseup.connection touchend.connection", null);
+            
+            // Remove temporary connection
+            tempConnectionGroup.remove();
+            
+            // Get the target position based on event type
+            let targetPos;
+            if (e.type.startsWith('touch')) {
+                const touch = e.changedTouches[0];
+                const rect = svg.node().getBoundingClientRect();
+                targetPos = {
+                    x: (touch.clientX - rect.left - currentZoom.x) / currentZoom.k,
+                    y: (touch.clientY - rect.top - currentZoom.y) / currentZoom.k
+                };
+            } else {
+                targetPos = getMousePosition(e);
+            }
+
+            // Find the closest node within a reasonable distance
+            let closestNode = null;
+            let closestDistance = Infinity;
+            let closestPort = null;
+
+            // Check all nodes for a valid target port
+            nodes.forEach(node => {
+                node.ports.forEach(port => {
+                    // Allow connections between compatible ports
+                    if ((port.type === 'input' && sourcePort.type === 'output') || 
+                        (port.type === 'output' && sourcePort.type === 'input')) {
+                        if (port.resourceType === sourcePort.resourceType || 
+                            port.resourceType === RESOURCE_TYPES.CUSTOM ||
+                            sourcePort.resourceType === RESOURCE_TYPES.CUSTOM) {
+                            const portPos = getAbsPortPosition(node, port);
+                            const distance = Math.sqrt(
+                                Math.pow(portPos.x - targetPos.x, 2) + 
+                                Math.pow(portPos.y - targetPos.y, 2)
+                            );
+                            if (distance < closestDistance && distance < 50) {
+                                closestNode = node;
+                                closestPort = port;
+                                closestDistance = distance;
+                            }
+                        }
+                    }
+                });
+            });
+
+            // If we found a valid target node with a compatible port
+            if (closestNode && closestPort) {
+                // Create new connection
+                connectionIdCounter++;
+                connections.push({
+                    id: `conn-${connectionIdCounter}`,
+                    sourceNodeId: sourcePort.type === 'output' ? sourceNode.id : closestNode.id,
+                    sourcePortId: sourcePort.type === 'output' ? sourcePort.id : closestPort.id,
+                    targetNodeId: sourcePort.type === 'output' ? closestNode.id : sourceNode.id,
+                    targetPortId: sourcePort.type === 'output' ? closestPort.id : sourcePort.id
+                });
+            } else if (sourcePort.type === 'output') {
+                // If dropping an output port and no valid target found, show the module creation menu
+                // Convert world coordinates back to screen coordinates for the menu position
+                const screenPos = worldToScreen(targetPos.x, targetPos.y);
+                const menuEvent = {
+                    clientX: screenPos.x,
+                    clientY: screenPos.y,
+                    preventDefault: () => {},
+                    stopPropagation: () => {}
+                };
+                showModuleCreationMenu(menuEvent, sourcePort);
+            } else {
+                // If dropping an input port and no valid target found, create a new container
+                createAndConnectContainer({
+                    ...sourcePort,
+                    parentNode: sourceNode
+                }, targetPos);
+            }
+            
+            tempConnectionData = null;
+            render();
+        }
+
+        // ... existing code ...
+        function handlePortMouseUp(event, portData) {
+            if (tempConnectionData) {
+                // Get the world position where the mouse was released
+                const worldPos = screenToWorld(event.clientX, event.clientY);
+                
+                // Check if we're over a compatible input port
+                const targetPort = findPortAtPosition(worldPos.x, worldPos.y);
+                
+                if (targetPort && targetPort.type === 'input' && 
+                    targetPort.resourceType === tempConnectionData.resourceType &&
+                    targetPort.parentNode.id !== tempConnectionData.parentNode.id) {
+                    // Create connection to existing port
+                    connectionIdCounter++;
+                    connections.push({
+                        id: `conn-${connectionIdCounter}`,
+                        sourceNodeId: tempConnectionData.parentNode.id,
+                        sourcePortId: tempConnectionData.id,
+                        targetNodeId: targetPort.parentNode.id,
+                        targetPortId: targetPort.id
+                    });
+                } else {
+                    // Show module creation menu at the drop location
+                    showModuleCreationMenu(event, tempConnectionData);
+                }
+                
+                // Clear temporary connection
+                tempConnectionData = null;
+                
+                // Force immediate render
+                requestAnimationFrame(() => {
+                    render();
+                });
+            }
+        }
+    </script>
+</body>
+</html>

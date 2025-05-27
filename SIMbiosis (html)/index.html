@@ -1,0 +1,3281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>D3 Solar Array Builder - Dynamic Wire Sizing</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            font-family: sans-serif; margin: 0; padding: 0; background-color: #f0f0f0;
+            height: 100vh; display: flex; flex-direction: column;
+            overscroll-behavior: none;
+        }
+        #app-title { 
+            text-align: center; 
+            padding: 10px; 
+            background-color: #333; 
+            color: white; 
+            margin-bottom: 0;
+        }
+        #system-hud {
+            background-color: #2c3e50;
+            color: white;
+            padding: 10px;
+            display: flex;
+            justify-content: space-around;
+            border-bottom: 2px solid #34495e;
+        }
+        .hud-section {
+            text-align: center;
+            padding: 0 15px;
+            border-right: 1px solid #34495e;
+        }
+        .hud-section:last-child {
+            border-right: none;
+        }
+        .hud-section h4 {
+            margin: 0 0 5px 0;
+            font-size: 0.9em;
+            color: #95a5a6;
+        }
+        .hud-section p {
+            margin: 0;
+            font-size: 1.1em;
+            font-weight: bold;
+        }
+        .hud-section .status-ok { color: #2ecc71; }
+        .hud-section .status-exceeds { color: #e74c3c; }
+        .hud-section .status-disconnected { color: #95a5a6; }
+        .hud-section .spec-value {
+            color: #3498db;
+            font-weight: bold;
+        }
+        #main-container { 
+            display: flex; 
+            flex-grow: 1; 
+            overflow: hidden; 
+            padding: 10px; 
+            gap: 10px; 
+        }
+        #canvas-container { 
+            flex-grow: 1; border: 1px solid #ccc; background-color: #fff; 
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1); position: relative; height: 100%;
+            touch-action: none;
+        }
+        #sidebar { width: 300px; padding: 15px; background-color: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
+        #sidebar > div { border: 1px solid #eee; padding: 10px; border-radius: 5px; margin-bottom:10px;}
+        #sidebar h3 { margin-top: 0; font-size: 1.1em; color: #333; border-bottom: 1px solid #ddd; padding-bottom: 5px; }
+        #sidebar label { display: block; margin-bottom: 8px; font-size: 0.9em; }
+        #sidebar input[type="number"] { width: 60px; margin-left: 5px; padding: 4px; font-size: 0.9em; }
+        #sidebar input[type="checkbox"] { margin-right: 5px; vertical-align: middle;}
+        #sidebar button { padding: 8px 12px; background-color: #5cb85c; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; margin-top: 5px; width: 100%; box-sizing: border-box;}
+        #sidebar button:hover { background-color: #4cae4c; }
+        #sidebar button.remove-btn { background-color: #d9534f; }
+        #sidebar button.remove-btn:hover { background-color: #c9302c; }
+        
+        #controller-library, #panel-library, #battery-library { 
+            max-height: 150px; 
+            overflow-y: auto; 
+            margin-bottom: 10px;
+        }
+        #controller-library ul, #panel-library ul, #battery-library ul { 
+            list-style: none; 
+            padding: 0; 
+            margin: 0; 
+        }
+        #controller-library li, #panel-library li, #battery-library li { 
+            padding: 6px; 
+            margin-bottom: 4px; 
+            background-color: #f9f9f9; 
+            border: 1px solid #eee; 
+            border-radius: 4px; 
+            cursor: pointer;
+            font-size: 0.8em;
+        }
+        #controller-library li:hover, #panel-library li:hover, #battery-library li:hover { 
+            background-color: #e9e9e9; 
+        }
+        #controller-library li small, #panel-library li small, #battery-library li small { 
+            display: block; 
+            color: #555; 
+            font-size: 0.9em; 
+        }
+
+        svg { width: 100%; height: 100%; cursor: default; display: block; }
+
+        .item-group { cursor: grab; pointer-events: all; }
+        .panel .panel-rect { fill: #4a90e2; stroke: #357ABD; stroke-width: 2; }
+        .panel .panel-grid { stroke: rgba(255, 255, 255, 0.3); stroke-width: 1; }
+        .panel .panel-text { 
+            font-size: 10px; 
+            fill: white; 
+            pointer-events: none; 
+            text-anchor: middle; 
+            dominant-baseline: middle;
+            padding: 5px;
+        }
+        
+        .battery .battery-rect { fill: #28a745; stroke: #1e7e34; stroke-width: 2; } 
+        .battery .battery-text { 
+            font-size: 10px; 
+            fill: white; 
+            pointer-events: none; 
+            text-anchor: middle; 
+            dominant-baseline: middle;
+            padding: 5px;
+        }
+
+        .controller .controller-rect { stroke-width: 2; transition: fill 0.3s ease, stroke 0.3s ease; }
+        .controller .controller-text { 
+            font-size: 10px; 
+            fill: #333; 
+            pointer-events: none; 
+            text-anchor: middle; 
+            dominant-baseline: middle;
+        }
+        .flames-group .spark-line { stroke-linecap: round; }
+        .overload-text {
+            font-size: 16px;
+            font-weight: bold;
+            fill: red;
+            text-anchor: middle;
+            pointer-events: none;
+            animation: blink-animation 0.7s steps(2, start) infinite;
+        }
+        @keyframes blink-animation { to { visibility: hidden; } }
+
+        .handle { 
+            cursor: pointer; 
+            stroke: #333; 
+            stroke-width: 8;
+            stroke-opacity: 0;
+            pointer-events: all;
+        }
+        .handle.positive { fill: #FF6347; }
+        .handle.negative { fill: #4682B4; }
+        .handle::after {
+            content: '';
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background: rgba(0,0,0,0.1);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+
+        .wire { /* stroke-width set dynamically */ pointer-events: stroke; fill: none; cursor: pointer; transition: stroke-width 0.2s; }
+        .wire:hover { /* stroke-width dynamically increased */ } 
+        .temp-wire { stroke: #aaa; stroke-width: 2; stroke-dasharray: 5,5; pointer-events: none; }
+        .handle-label { font-size: 10px; fill: #333; pointer-events: none; text-anchor: middle; }
+        
+        .snap-guide {
+            stroke: lightgreen;
+            stroke-width: 1.5px;
+            stroke-dasharray: "4, 4";
+            pointer-events: none;
+        }
+
+        #validation-status .status-ok { color: green; font-weight: bold; }
+        #validation-status .status-exceeds { color: red; font-weight: bold; }
+        #validation-status .status-disconnected { color: #777; font-weight: bold; }
+        #validation-status p { margin-bottom: 5px; }
+
+        .delete-btn {
+            cursor: pointer;
+            pointer-events: all;
+            z-index: 1000;
+        }
+
+        .delete-btn circle {
+            fill: #e74c3c;
+            stroke: #c0392b;
+            stroke-width: 1;
+            opacity: 0;
+            transition: opacity 0.2s;
+            pointer-events: all;
+        }
+
+        .item-group:hover .delete-btn circle,
+        .item-group.selected .delete-btn circle {
+            opacity: 1;
+        }
+
+        .delete-btn circle:hover {
+            fill: #c0392b;
+        }
+
+        .delete-btn text {
+            fill: white;
+            font-size: 12px;
+            font-weight: bold;
+            pointer-events: none;
+            text-anchor: middle;
+            dominant-baseline: middle;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+
+        .item-group:hover .delete-btn text,
+        .item-group.selected .delete-btn text {
+            opacity: 1;
+        }
+
+        .item-group {
+            cursor: grab;
+            pointer-events: all;
+        }
+
+        .item-group rect {
+            pointer-events: all;
+        }
+
+        .item-group.selected { 
+            outline: 2px solid #4a90e2; 
+            z-index: 100;
+        }
+        .item-group.selected .panel-rect { stroke: #4a90e2; stroke-width: 3; }
+        .item-group.selected .battery-rect { stroke: #4a90e2; stroke-width: 3; }
+        .item-group.selected .controller-rect { stroke: #4a90e2; stroke-width: 3; }
+
+        #inspector-panel { display: none; }
+        #inspector-panel.visible { display: block; }
+
+        #status-messages p { margin-bottom: 10px; line-height: 1.4; }
+    </style>
+</head>
+<body>
+    <h1 id="app-title">Solar Array Builder Simulator</h1>
+    <div id="system-hud">
+        <div class="hud-section">
+            <h4>System Specs</h4>
+            <p>Rated Array: <span id="rated-array-capacity" class="spec-value">0</span>kW</p>
+            <p>Max Array: <span id="max-array-capacity" class="spec-value">0</span>kW</p>
+            <p>Battery: <span id="battery-capacity" class="spec-value">0</span>kWh</p>
+            <p>Daily Output: <span id="daily-solar-output" class="spec-value">0</span>kWh</p>
+            <p>Total Cost: <span id="total-system-cost" class="spec-value">$0</span></p>
+        </div>
+        <div class="hud-section">
+            <h4>Solar Array</h4>
+            <p>Power: <span id="total-wmp">0</span>W / <span id="max-wmp">0</span>W</p>
+            <p>Voltage: <span id="total-voc">0</span>V / <span id="max-voc">0</span>V</p>
+            <p>Current: <span id="total-isc">0</span>A / <span id="max-isc">0</span>A</p>
+            <p>Config: <span id="config-type">N/A</span></p>
+            <p>Daily Energy: <span id="daily-energy">0</span>kWh</p>
+        </div>
+        <div class="hud-section">
+            <h4>Battery Bank</h4>
+            <p>Voltage: <span id="total-batt-voltage">0</span>V</p>
+            <p>Capacity: <span id="total-batt-ah">0</span>Ah (<span id="total-batt-kwh">0</span>kWh)</p>
+            <p>Max Current: <span id="total-batt-max-current">0</span><span id="max-current-unit">A</span></p>
+            <p>Config: <span id="batt-config-type">N/A</span></p>
+        </div>
+        <div class="hud-section">
+            <h4>Wire Specs</h4>
+            <p>Solar Array: <span id="solar-wire-gauge">10 AWG</span> (<span id="solar-wire-amps">30</span>A)</p>
+            <p>Battery: <span id="battery-wire-gauge">N/A</span> (<span id="battery-wire-amps">0</span>A)</p>
+        </div>
+        <div class="hud-section">
+            <h4>System Status</h4>
+            <div id="status-messages">Status: N/A</div>
+        </div>
+    </div>
+    <div id="main-container">
+        <div id="canvas-container">
+            <svg id="canvas"></svg>
+        </div>
+        <div id="sidebar">
+            <div id="inspector-panel">
+                <h3>Inspector</h3>
+                <div id="inspector-content"></div>
+            </div>
+            <div id="system-controls">
+                <h3>System Controls</h3>
+                <button id="saveSystemBtn">Save System</button>
+                <button id="loadSystemBtn">Load System</button>
+                <button id="exportComponentBtn">Export Selected</button>
+                <button id="importComponentBtn">Import Component</button>
+                <button id="exportConfigBtn">Export Config</button>
+                <input type="file" id="fileInput" style="display: none;" accept=".json">
+            </div>
+            <div id="panel-library-section">
+                <h3>Panel Library</h3>
+                <div id="panel-library"><ul></ul></div>
+            </div>
+            <div id="panel-controls">
+                <h3>Panel Specs</h3>
+                <label>Name: <input type="text" id="panel-name" value="Custom Panel"></label>
+                <label>Wmp: <input type="number" id="wmp" value="300"></label>
+                <label>Vmp: <input type="number" id="vmp" value="32.5"></label>
+                <label>Voc: <input type="number" id="voc" value="39.5"></label>
+                <label>Isc: <input type="number" id="isc" value="9.75"></label>
+                <label>Imp: <input type="number" id="imp" value="8.0"></label>
+                <label>Cost: $<input type="number" id="panel-cost" value="0" min="0" step="0.01"></label>
+                <button id="addPanelBtn">Add Solar Panel</button>
+            </div>
+            <div id="battery-library-section">
+                <h3>Battery Library</h3>
+                <div id="battery-library"><ul></ul></div>
+            </div>
+            <div id="battery-controls">
+                <h3>Battery Specs</h3>
+                <label>Name: <input type="text" id="batt-name" value="Custom Battery"></label>
+                <label>Voltage: <input type="number" id="batt-voltage" value="12"> V</label>
+                <label>Ah: <input type="number" id="batt-ah" value="100"> Ah</label>
+                <label>Max Discharge: <input type="number" id="batt-max-discharge" value="100"> A</label>
+                <label>Cost: $<input type="number" id="batt-cost" value="0" min="0" step="0.01"></label>
+                <button id="addBatteryBtn">Add Battery</button>
+            </div>
+            <div id="controller-library-section">
+                <h3>Controller Library</h3>
+                <div id="controller-library"><ul></ul></div>
+            </div>
+            <div id="controller-controls">
+                <h3>Charge Controller</h3>
+                <label>Controller Type: 
+                    <select id="ctrl-type">
+                        <option value="charge_controller">Charge Controller</option>
+                        <option value="hybrid_inverter">Hybrid Inverter</option>
+                        <option value="all_in_one">All-in-One</option>
+                    </select>
+                </label>
+                <label>Max PV Voc: <input type="number" id="ctrl-max-voc" value="70"></label>
+                <label>Max PV Isc: <input type="number" id="ctrl-max-isc" value="15"></label>
+                <label>Max PV Wmp: <input type="number" id="ctrl-max-wmp" value="1000"></label>
+                <input type="hidden" id="ctrl-rated-charge-current" value="20">
+                <label>Cost: $<input type="number" id="ctrl-cost" value="0" min="0" step="0.01"></label>
+                <div class="voltage-compatibility">
+                    <h4>Battery Voltage Compatibility</h4>
+                    <label><input type="checkbox" class="voltage-checkbox" value="12" checked> 12V</label>
+                    <label><input type="checkbox" class="voltage-checkbox" value="24"> 24V</label>
+                    <label><input type="checkbox" class="voltage-checkbox" value="36"> 36V</label>
+                    <label><input type="checkbox" class="voltage-checkbox" value="48"> 48V</label>
+                </div>
+                <div id="hybrid-inverter-fields" style="display: none;">
+                    <h4>Hybrid Inverter Properties</h4>
+                    <label>Max AC Output W: <input type="number" id="ctrl-max-ac-output-w" value="3000"></label>
+                    <label>Max AC Output A: <input type="number" id="ctrl-max-ac-output-a" value="13"></label>
+                    <label>Max DC Amps: <input type="number" id="ctrl-max-dc-amps" value="100"></label>
+                </div>
+                <div id="all-in-one-fields" style="display: none;">
+                    <h4>All-in-One Properties</h4>
+                    <label>Max AC Output W: <input type="number" id="ctrl-max-ac-output-w" value="3600"></label>
+                    <label>Max AC Output A: <input type="number" id="ctrl-max-ac-output-a" value="15"></label>
+                    <label>Internal Battery kWh: <input type="number" id="ctrl-internal-battery-kwh" value="3.6"></label>
+                    <label>Internal Battery Voltage: <input type="number" id="ctrl-internal-battery-voltage" value="48"></label>
+                </div>
+                <button id="addControllerBtn">Add/Update Controller on Canvas</button>
+                <button id="removeControllerBtn" class="remove-btn" style="display:none;">Remove Controller from Canvas</button>
+            </div>
+            <button id="clearAllBtn" class="remove-btn">Clear All Canvas</button>
+        </div>
+    </div>
+
+    <script>
+        const svg = d3.select("#canvas");
+        let svgWidth, svgHeight;
+
+        function updateSvgDimensions() { /* ... (same) ... */ 
+            const container = d3.select("#canvas-container").node();
+            if (container) {
+                svgWidth = container.clientWidth;
+                svgHeight = container.clientHeight;
+                svg.attr("viewBox", `0 0 ${svgWidth} ${svgHeight}`);
+            }
+        }
+        
+        let allItems = []; let connections = [];
+        let panelIdCounter = 0; let batteryIdCounter = 0; let connectionIdCounter = 0;
+
+        const panelWidth = 100; const panelHeight = 60; 
+        const controllerBaseHeight = 80; 
+        const controllerWidth = 120; 
+        const handleRadius = 10; 
+        const bezierOffset = 75;
+        const numSparks = 10; 
+        const selfDestructDelay = 3000; 
+
+        const CONTROLLER_ID = "controller-0";
+        const CONTROLLER_COLOR_DISCONNECTED = "white";
+        const CONTROLLER_STROKE_DISCONNECTED = "#b0b0b0";
+        const CONTROLLER_COLOR_OK = "#5cb85c";
+        const CONTROLLER_STROKE_OK = "#4cae4c";
+        const CONTROLLER_COLOR_ERROR = "#d9534f"; 
+        const CONTROLLER_STROKE_ERROR = "#d43f3a";
+
+        const WIRE_COLOR_POS_POS = "red";
+        const WIRE_COLOR_NEG_NEG = "black";
+        const WIRE_COLOR_MIXED = "gray";
+
+        let overloadAnimationTimer = null; 
+        let selfDestructTimeout = null;   
+
+        const controllerPresets = [
+            { 
+                name: "Victron SmartSolar 150/35", 
+                type: "charge_controller",
+                maxVoc: 150, 
+                maxIsc: 35, 
+                maxWmp: 1000, 
+                ratedChargeCurrent: 35, 
+                supportedVoltages: [12, 24, 36, 48], 
+                note: "PV Isc:35A, Bat Chg:35A",
+                cost: 400
+            },
+            { 
+                name: "EcoFlow DELTA Pro", 
+                type: "all_in_one",
+                maxVoc: 150, 
+                maxIsc: 15, 
+                maxWmp: 1600, 
+                ratedChargeCurrent: 30, 
+                supportedVoltages: [12, 24],
+                internalBatteryKWh: 3.6,
+                maxACOutputW: 3600,
+                maxACOutputA: 15,
+                note: "PV Isc:15A, Int.Bat:3.6kWh, AC Out:3600W",
+                cost: 3500
+            },
+            { 
+                name: "Generic Small MPPT", 
+                type: "charge_controller",
+                maxVoc: 100, 
+                maxIsc: 20, 
+                maxWmp: 500, 
+                ratedChargeCurrent: 20, 
+                supportedVoltages: [12, 24], 
+                note: "PV Isc:20A, Est.Bat Chg:20A",
+                cost: 150
+            },
+            {
+                name: "Victron MultiPlus-II 48/3000",
+                type: "hybrid_inverter",
+                maxVoc: 150,
+                maxIsc: 35,
+                maxWmp: 2000,
+                ratedChargeCurrent: 35,
+                supportedVoltages: [48],
+                maxACOutputW: 3000,
+                maxACOutputA: 13,
+                maxDCAmps: 100,
+                note: "PV Isc:35A, AC Out:3000W, DC:100A",
+                cost: 2000
+            }
+        ];
+
+        const panelPresets = [
+            {
+                name: "Trina Solar Vertex S+",
+                wmp: 260,
+                vmp: 32.5,
+                voc: 39.5,
+                isc: 9.75,
+                imp: 8.0,
+                cost: 150,
+                note: "High-efficiency residential panel"
+            },
+            {
+                name: "REC Alpha Pure",
+                wmp: 410,
+                vmp: 33.2,
+                voc: 40.1,
+                isc: 13.2,
+                imp: 12.3,
+                cost: 250,
+                note: "Premium residential panel"
+            },
+            {
+                name: "Canadian Solar HiKu",
+                wmp: 550,
+                vmp: 41.5,
+                voc: 49.5,
+                isc: 14.2,
+                imp: 13.2,
+                cost: 200,
+                note: "Commercial/utility panel"
+            }
+        ];
+
+        const batteryPresets = [
+            {
+                name: "Battle Born 100Ah",
+                voltage: 12,
+                ah: 100,
+                maxDischarge: 100,
+                cost: 900,
+                note: "LiFePO4, 1280Wh"
+            },
+            {
+                name: "EcoFlow DELTA Pro",
+                voltage: 48,
+                ah: 75,
+                maxDischarge: 150,
+                cost: 3500,
+                note: "LiFePO4, 3600Wh"
+            },
+            {
+                name: "Renogy 200Ah",
+                voltage: 12,
+                ah: 200,
+                maxDischarge: 200,
+                cost: 1200,
+                note: "LiFePO4, 2560Wh"
+            }
+        ];
+
+        function createChargeController(x, y, specs) {
+            const effectiveHeight = controllerBaseHeight + (specs.type === 'hybrid_inverter' ? 40 : 20);
+            const controller = {
+                id: CONTROLLER_ID, 
+                type: 'controller', 
+                subtype: specs.type || 'charge_controller',
+                x: x, 
+                y: y, 
+                width: controllerWidth, 
+                height: effectiveHeight,
+                specs: { 
+                    ...specs,
+                    cost: specs.cost || 0 // Add cost property
+                },
+                handles: {}
+            };
+
+            // Common handles for all types
+            controller.handles.pvPositive = { 
+                id: `${CONTROLLER_ID}-pv-pos`,  
+                label: "PV+",  
+                polarity: 'positive', 
+                x: 0,            
+                y: effectiveHeight * 0.25, 
+                connectedTo: [] 
+            };
+            controller.handles.pvNegative = { 
+                id: `${CONTROLLER_ID}-pv-neg`,  
+                label: "PV-",  
+                polarity: 'negative', 
+                x: controllerWidth, 
+                y: effectiveHeight * 0.25, 
+                connectedTo: [] 
+            };
+
+            // Add handles based on controller type
+            if (specs.type === 'charge_controller' || specs.type === 'hybrid_inverter') {
+                controller.handles.batteryPositive = { 
+                    id: `${CONTROLLER_ID}-batt-pos`,
+                    label: "BAT+", 
+                    polarity: 'positive', 
+                    x: 0,            
+                    y: effectiveHeight * 0.75, 
+                    connectedTo: [] 
+                };
+                controller.handles.batteryNegative = { 
+                    id: `${CONTROLLER_ID}-batt-neg`,
+                    label: "BAT-", 
+                    polarity: 'negative', 
+                    x: controllerWidth, 
+                    y: effectiveHeight * 0.75, 
+                    connectedTo: [] 
+                };
+            }
+
+            if (specs.type === 'hybrid_inverter' || specs.type === 'all_in_one') {
+                controller.handles.acIn = { 
+                    id: `${CONTROLLER_ID}-ac-in`,
+                    label: "AC IN", 
+                    polarity: 'ac', 
+                    x: 0,            
+                    y: effectiveHeight * 0.5, 
+                    connectedTo: [] 
+                };
+                controller.handles.acOut = { 
+                    id: `${CONTROLLER_ID}-ac-out`,
+                    label: "AC OUT", 
+                    polarity: 'ac', 
+                    x: controllerWidth, 
+                    y: effectiveHeight * 0.5, 
+                    connectedTo: [] 
+                };
+            }
+
+            return controller;
+        }
+
+        function populateControllerLibrary() { 
+            const libraryUl = d3.select("#controller-library ul");
+            libraryUl.selectAll("li")
+                .data(controllerPresets)
+                .enter()
+                .append("li")
+                .html(d => {
+                    let specs = `(PV Voc:${d.maxVoc}V, PV Isc:${d.maxIsc}A, PV Wmp:${d.maxWmp}W`;
+                    if (d.type === 'hybrid_inverter' || d.type === 'all_in_one') {
+                        specs += `, AC Out:${d.maxACOutputW}W/${d.maxACOutputA}A`;
+                    }
+                    if (d.type === 'hybrid_inverter') {
+                        specs += `, DC:${d.maxDCAmps}A`;
+                    }
+                    if (d.type === 'all_in_one') {
+                        specs += `, Int.Bat:${d.internalBatteryKWh}kWh`;
+                    }
+                    specs += `)<br>${d.note || ''}`;
+                    return `${d.name} <small>${specs}</small>`;
+                })
+                .on("click", (event, d_preset) => {
+                    d3.select("#ctrl-max-voc").node().value = d_preset.maxVoc;
+                    d3.select("#ctrl-max-isc").node().value = d_preset.maxIsc;
+                    d3.select("#ctrl-max-wmp").node().value = d_preset.maxWmp;
+                    d3.select("#ctrl-rated-charge-current").node().value = d_preset.ratedChargeCurrent;
+                    d3.select("#ctrl-type").node().value = d_preset.type;
+                    
+                    // Update voltage compatibility checkboxes
+                    d3.selectAll(".voltage-checkbox").property("checked", false);
+                    d_preset.supportedVoltages.forEach(voltage => {
+                        d3.select(`.voltage-checkbox[value="${voltage}"]`).property("checked", true);
+                    });
+
+                    // Update additional fields based on type
+                    if (d_preset.type === 'hybrid_inverter' || d_preset.type === 'all_in_one') {
+                        d3.select("#ctrl-max-ac-output-w").node().value = d_preset.maxACOutputW;
+                        d3.select("#ctrl-max-ac-output-a").node().value = d_preset.maxACOutputA;
+                    }
+                    if (d_preset.type === 'hybrid_inverter') {
+                        d3.select("#ctrl-max-dc-amps").node().value = d_preset.maxDCAmps;
+                    }
+                    if (d_preset.type === 'all_in_one') {
+                        d3.select("#ctrl-internal-battery-kwh").node().value = d_preset.internalBatteryKWh;
+                    }
+                    
+                    addOrUpdateControllerFromInputs();
+                });
+        }
+
+        function populatePanelLibrary() {
+            const libraryUl = d3.select("#panel-library ul");
+            libraryUl.selectAll("li")
+                .data(panelPresets)
+                .enter()
+                .append("li")
+                .html(d => {
+                    const specs = `(Wmp:${d.wmp}W, Vmp:${d.vmp}V, Voc:${d.voc}V, Isc:${d.isc}A, Imp:${d.imp}A)<br>${d.note || ''}`;
+                    return `${d.name} <small>${specs}</small>`;
+                })
+                .on("click", (event, d_preset) => {
+                    // Add panel to canvas
+                    const position = calculateGridPosition('panel');
+                    const newPanel = createPanel(position.x, position.y, {
+                        ...d_preset,
+                        name: d_preset.name
+                    });
+                    allItems.push(newPanel);
+                    d3.select("#total-system-cost").text(`$${calculateTotalSystemCost()}`);
+                    render();
+                });
+        }
+
+        function populateBatteryLibrary() {
+            const libraryUl = d3.select("#battery-library ul");
+            libraryUl.selectAll("li")
+                .data(batteryPresets)
+                .enter()
+                .append("li")
+                .html(d => {
+                    const specs = `(${d.voltage}V, ${d.ah}Ah, ${d.maxDischarge}A Max)<br>${d.note || ''}`;
+                    return `${d.name} <small>${specs}</small>`;
+                })
+                .on("click", (event, d_preset) => {
+                    // Add battery to canvas
+                    const position = calculateGridPosition('battery');
+                    const newBattery = createBattery(position.x, position.y, {
+                        ...d_preset,
+                        name: d_preset.name
+                    });
+                    allItems.push(newBattery);
+                    d3.select("#total-system-cost").text(`$${calculateTotalSystemCost()}`);
+                    render();
+                });
+        }
+
+        function createPanel(x, y, specs) { 
+            const id = `panel-${panelIdCounter++}`;
+            const imp = specs.wmp / specs.vmp;
+            
+            // Count existing panels with the same base name
+            const baseName = specs.name || "Custom Panel";
+            const existingPanels = allItems.filter(item => 
+                item.type === 'panel' && item.specs.name && item.specs.name.startsWith(baseName)
+            );
+            const name = existingPanels.length > 0 ? `${baseName}_${existingPanels.length}` : baseName;
+
+            // If this is a custom panel (not from library), add it to the library
+            if (!panelPresets.some(p => p.name === baseName)) {
+                const newPreset = {
+                    name: baseName,
+                    wmp: specs.wmp,
+                    vmp: specs.vmp,
+                    voc: specs.voc,
+                    isc: specs.isc,
+                    imp: imp,
+                    cost: specs.cost || 0,
+                    note: "Custom panel"
+                };
+                panelPresets.push(newPreset);
+                populatePanelLibrary(); // Refresh the library display
+            }
+
+            return {
+                id: id, 
+                type: 'panel', 
+                x: x, 
+                y: y, 
+                width: panelWidth, 
+                height: panelHeight,
+                specs: { 
+                    ...specs, 
+                    name: name,
+                    imp: isNaN(imp) ? 0 : parseFloat(imp.toFixed(2)),
+                    cost: specs.cost || 0
+                },
+                handles: {
+                    positive: { id: `${id}-pos`, polarity: 'positive', x: 0, y: panelHeight / 2, connectedTo: [] },
+                    negative: { id: `${id}-neg`, polarity: 'negative', x: panelWidth, y: panelHeight / 2, connectedTo: [] },
+                }
+            };
+        }
+
+        function createBattery(x, y, specs) {
+            const id = `batt-${batteryIdCounter++}`;
+            const voltage = parseFloat(specs.voltage) || 12;
+            const ah = parseFloat(specs.ah) || 100;
+            const maxDischarge = parseFloat(specs.maxDischarge) || 100;
+            const kWh = (voltage * ah) / 1000;
+            
+            // Count existing batteries with the same base name
+            const baseName = specs.name || "Custom Battery";
+            const existingBatteries = allItems.filter(item => 
+                item.type === 'battery' && item.specs.name && item.specs.name.startsWith(baseName)
+            );
+            const name = existingBatteries.length > 0 ? `${baseName}_${existingBatteries.length}` : baseName;
+
+            // If this is a custom battery (not from library), add it to the library
+            if (!batteryPresets.some(b => b.name === baseName)) {
+                const newPreset = {
+                    name: baseName,
+                    voltage: voltage,
+                    ah: ah,
+                    maxDischarge: maxDischarge,
+                    cost: specs.cost || 0,
+                    note: "Custom battery"
+                };
+                batteryPresets.push(newPreset);
+                populateBatteryLibrary(); // Refresh the library display
+            }
+            
+            return {
+                id: id, 
+                type: 'battery', 
+                x: x, 
+                y: y, 
+                width: panelWidth, 
+                height: panelHeight, 
+                specs: { 
+                    voltage: voltage, 
+                    ah: ah,
+                    maxDischarge: maxDischarge,
+                    kWh: parseFloat(kWh.toFixed(2)),
+                    name: name,
+                    cost: specs.cost || 0
+                },
+                handles: {
+                    positive: { id: `${id}-pos`, polarity: 'positive', x: 0, y: panelHeight / 2, connectedTo: [] },
+                    negative: { id: `${id}-neg`, polarity: 'negative', x: panelWidth, y: panelHeight / 2, connectedTo: [] },
+                }
+            };
+        }
+
+        let SOURCELINE = null; let DRAGGING_HANDLE_INFO = null;
+        const handleDrag = d3.drag() 
+            .on("start", function(event, d_source_handle_data) {
+                event.sourceEvent.stopPropagation();
+                const item = d3.select(this.parentNode).datum(); 
+                const sourceHandleAbsPos = getHandleAbsolutePos(item.id, d_source_handle_data.id);
+                DRAGGING_HANDLE_INFO = { 
+                    itemId: item.id, 
+                    handleId: d_source_handle_data.id, 
+                    sourceHandleRef: d_source_handle_data,
+                    sourcePos: sourceHandleAbsPos,
+                    sourceItem: item
+                };
+                
+                // Create temporary path
+                SOURCELINE = svg.append("path")
+                    .attr("class", "temp-wire")
+                    .style("stroke", "#aaa")
+                    .style("stroke-width", 2)
+                    .style("stroke-dasharray", "5,5")
+                    .style("fill", "none");
+                
+                // Initial path
+                const initialPath = generateBezierPath(
+                    sourceHandleAbsPos,
+                    d_source_handle_data,
+                    item,
+                    sourceHandleAbsPos,
+                    d_source_handle_data,
+                    item
+                );
+                SOURCELINE.attr("d", initialPath);
+
+                if (event.sourceEvent.type.startsWith("touch")) {
+                    event.sourceEvent.preventDefault(); 
+                }
+            })
+            .on("drag", function(event) {
+                if (!SOURCELINE || !DRAGGING_HANDLE_INFO) return;
+                
+                // Get pointer position relative to SVG
+                const [pointerX, pointerY] = d3.pointer(event.sourceEvent, svg.node());
+                
+                // Create temporary target handle data
+                const tempTargetHandle = {
+                    ...DRAGGING_HANDLE_INFO.sourceHandleRef,
+                    x: pointerX - DRAGGING_HANDLE_INFO.sourcePos.x,
+                    y: pointerY - DRAGGING_HANDLE_INFO.sourcePos.y
+                };
+                
+                // Create temporary target item data
+                const tempTargetItem = {
+                    x: pointerX,
+                    y: pointerY,
+                    width: 0,
+                    height: 0,
+                    handles: {
+                        positive: { x: 0, y: 0 },
+                        negative: { x: 0, y: 0 }
+                    }
+                };
+                
+                // Update path with bezier curve
+                const path = generateBezierPath(
+                    DRAGGING_HANDLE_INFO.sourcePos,
+                    DRAGGING_HANDLE_INFO.sourceHandleRef,
+                    DRAGGING_HANDLE_INFO.sourceItem,
+                    { x: pointerX, y: pointerY },
+                    tempTargetHandle,
+                    tempTargetItem
+                );
+                SOURCELINE.attr("d", path);
+            })
+            .on("end", function(event) {
+                if (SOURCELINE) SOURCELINE.remove();
+                SOURCELINE = null;
+                const sourceInfo = DRAGGING_HANDLE_INFO;
+                DRAGGING_HANDLE_INFO = null;
+                if (!sourceInfo) { 
+                    calculateTotalSpecs();
+                    calculateBatteryBankSpecs();
+                    // Update total cost display
+                    d3.select("#total-system-cost").text(`$${calculateTotalSystemCost()}`);
+                    render(); 
+                    return; 
+                }
+
+                // Get pointer position relative to SVG
+                const [pointerX, pointerY] = d3.pointer(event.sourceEvent, svg.node());
+
+                // Check if we're over any existing handle
+                let targetElement = null;
+                if (event.sourceEvent.type.startsWith("touch")) {
+                    const touch = event.sourceEvent.changedTouches[0];
+                    if (touch) {
+                        const touchX = touch.clientX;
+                        const touchY = touch.clientY;
+                        const elements = document.elementsFromPoint(touchX, touchY);
+                        targetElement = elements.find(el => 
+                            el.classList.contains('handle') || 
+                            el.closest('.handle') !== null
+                        );
+                    }
+                } else {
+                    targetElement = event.sourceEvent.target;
+                }
+
+                // If we're not over a handle, check if we're over empty canvas
+                if (!targetElement || !targetElement.classList.contains('handle')) {
+                    // Check if we're over empty canvas by checking if we're over the SVG element
+                    const isOverEmptyCanvas = event.sourceEvent.target === svg.node() || 
+                                            event.sourceEvent.target.classList.contains('temp-wire') ||
+                                            !d3.select(event.sourceEvent.target).closest('.item-group').size();
+                    
+                    if (isOverEmptyCanvas && sourceInfo.sourceItem.type !== 'controller') {
+                        // Create a new component based on the source item type
+                        let newItem;
+                        if (sourceInfo.sourceItem.type === 'panel') {
+                            const panelSpecs = {
+                                wmp: sourceInfo.sourceItem.specs.wmp,
+                                vmp: sourceInfo.sourceItem.specs.vmp,
+                                voc: sourceInfo.sourceItem.specs.voc,
+                                isc: sourceInfo.sourceItem.specs.isc,
+                                imp: sourceInfo.sourceItem.specs.imp,
+                                cost: sourceInfo.sourceItem.specs.cost // Copy the cost from source panel
+                            };
+                            newItem = createPanel(pointerX - panelWidth/2, pointerY - panelHeight/2, panelSpecs);
+                        } else if (sourceInfo.sourceItem.type === 'battery') {
+                            const batterySpecs = {
+                                voltage: sourceInfo.sourceItem.specs.voltage,
+                                ah: sourceInfo.sourceItem.specs.ah,
+                                maxDischarge: sourceInfo.sourceItem.specs.maxDischarge,
+                                cost: sourceInfo.sourceItem.specs.cost // Copy the cost from source battery
+                            };
+                            newItem = createBattery(pointerX - panelWidth/2, pointerY - panelHeight/2, batterySpecs);
+                        }
+
+                        if (newItem) {
+                            allItems.push(newItem);
+                            
+                            // Determine which handle to connect based on the source handle polarity
+                            const sourceHandle = sourceInfo.sourceHandleRef;
+                            const targetHandle = sourceHandle.polarity === 'positive' ? 
+                                newItem.handles.negative : newItem.handles.positive;
+
+                            // Create the connection
+                            const newConnectionId = `conn-${connectionIdCounter++}`;
+                            sourceHandle.connectedTo.push({ 
+                                itemId: newItem.id, 
+                                handleId: targetHandle.id, 
+                                connectionId: newConnectionId 
+                            });
+                            targetHandle.connectedTo.push({ 
+                                itemId: sourceInfo.itemId, 
+                                handleId: sourceHandle.id, 
+                                connectionId: newConnectionId 
+                            });
+                            connections.push({
+                                id: newConnectionId,
+                                sourceItemId: sourceInfo.itemId,
+                                sourceHandleId: sourceHandle.id,
+                                targetItemId: newItem.id,
+                                targetHandleId: targetHandle.id,
+                            });
+
+                            console.log(`Created new ${newItem.type} and connected it to ${sourceInfo.itemId}`);
+                            // Update total cost display immediately after creating new component
+                            d3.select("#total-system-cost").text(`$${calculateTotalSystemCost()}`);
+                            render();
+                            return;
+                        }
+                    }
+                    render();
+                    return;
+                }
+
+                // If we found a parent element of a handle, get the actual handle
+                if (!targetElement.classList.contains('handle')) {
+                    targetElement = targetElement.closest('.handle');
+                    if (!targetElement) {
+                        render();
+                        return;
+                    }
+                }
+
+                const targetSelection = d3.select(targetElement);
+                const targetHandleObject = targetSelection.datum();
+                const targetItemObject = d3.select(targetElement.parentNode).datum();
+                const sourceItemObject = allItems.find(i => i.id === sourceInfo.itemId);
+                const sourceHandleObject = sourceInfo.sourceHandleRef;
+
+                if (!targetItemObject || !sourceItemObject || targetItemObject.id === sourceItemObject.id) {
+                    console.log("Connection rejected: Target/Source not found or self-connection.");
+                } else {
+                    const existingConnection = connections.find(conn =>
+                        (conn.sourceItemId === sourceItemObject.id && conn.sourceHandleId === sourceHandleObject.id &&
+                         conn.targetItemId === targetItemObject.id && conn.targetHandleId === targetHandleObject.id) ||
+                        (conn.sourceItemId === targetItemObject.id && conn.sourceHandleId === targetHandleObject.id &&
+                         conn.targetItemId === sourceItemObject.id && conn.targetHandleId === sourceHandleObject.id)
+                    );
+                    if (existingConnection) {
+                        console.log("Connection rejected: This exact connection already exists.");
+                    } else {
+                        const newConnectionId = `conn-${connectionIdCounter++}`;
+                        sourceHandleObject.connectedTo.push({ 
+                            itemId: targetItemObject.id, 
+                            handleId: targetHandleObject.id, 
+                            connectionId: newConnectionId 
+                        });
+                        targetHandleObject.connectedTo.push({ 
+                            itemId: sourceItemObject.id, 
+                            handleId: sourceHandleObject.id, 
+                            connectionId: newConnectionId 
+                        });
+                        connections.push({
+                            id: newConnectionId,
+                            sourceItemId: sourceItemObject.id,
+                            sourceHandleId: sourceHandleObject.id,
+                            targetItemId: targetItemObject.id,
+                            targetHandleId: targetHandleObject.id,
+                        });
+                        console.log(`Connection ${newConnectionId} made: ${sourceItemObject.id}/${sourceHandleObject.id} -> ${targetItemObject.id}/${targetHandleObject.id}`);
+                    }
+                } 
+                render();
+
+                // After making connections, update specs and validation
+                calculateTotalSpecs();
+                calculateBatteryBankSpecs();
+                // Update total cost display
+                d3.select("#total-system-cost").text(`$${calculateTotalSystemCost()}`);
+            });
+
+        const itemDrag = d3.drag()
+            .on("start", function(event, d) {
+                d3.select(this).raise().classed("active", true);
+                if (event.sourceEvent.type.startsWith("touch")) {
+                    event.sourceEvent.preventDefault();
+                }
+            })
+            .on("drag", function(event, d) {
+                d.x = Math.max(0, Math.min(d.x + event.dx, svgWidth - d.width));
+                d.y = Math.max(0, Math.min(d.y + event.dy, svgHeight - d.height));
+                render();
+            })
+            .on("end", function() {
+                d3.select(this).classed("active", false);
+                render();
+            });
+
+        function render() {
+            if (!svgWidth || !svgHeight) updateSvgDimensions();
+
+            // Add pattern definition for solar panel grid
+            const defs = svg.select("defs");
+            if (defs.empty()) {
+                svg.append("defs");
+            }
+            
+            const gridPattern = svg.select("defs").select("#panel-grid-pattern");
+            if (gridPattern.empty()) {
+                svg.select("defs").append("pattern")
+                    .attr("id", "panel-grid-pattern")
+                    .attr("patternUnits", "userSpaceOnUse")
+                    .attr("width", "20")
+                    .attr("height", "20")
+                    .append("path")
+                    .attr("d", "M 0 0 L 20 0 M 0 0 L 0 20")
+                    .attr("stroke", "rgba(255, 255, 255, 0.3)")
+                    .attr("stroke-width", "1");
+            }
+
+            // Clear existing items
+            svg.selectAll(".item-group").remove();
+            svg.selectAll(".wire").remove();
+
+            // Create item groups
+            const itemGroups = svg.selectAll(".item-group")
+                .data(allItems, d => d.id)
+                .enter()
+                .append("g")
+                .attr("class", d => `item-group ${d.type}`)
+                .attr("data-id", d => d.id)
+                .attr("transform", d => `translate(${d.x},${d.y})`)
+                .call(itemDrag)
+                .style("pointer-events", "all")
+                .on("click", function(event, d) {
+                    console.log("Item group clicked:", d.id);
+                    event.stopPropagation();
+                    selectItem(d);
+                });
+
+            // Add rectangles
+            itemGroups.append("rect")
+                .attr("rx", 5)
+                .attr("ry", 5)
+                .attr("width", d => d.width)
+                .attr("height", d => d.height)
+                .attr("class", d => {
+                    if (d.type === 'panel') return 'panel-rect';
+                    if (d.type === 'battery') return 'battery-rect';
+                    if (d.type === 'controller') return 'controller-rect';
+                    return '';
+                })
+                .style("pointer-events", "all");
+
+            // Add grid pattern for panels
+            itemGroups.filter(d => d.type === 'panel')
+                .append("rect")
+                .attr("class", "panel-grid")
+                .attr("rx", 5)
+                .attr("ry", 5)
+                .attr("width", d => d.width)
+                .attr("height", d => d.height)
+                .style("fill", "url(#panel-grid-pattern)")
+                .style("pointer-events", "all");
+
+            // Add item name text
+            itemGroups.append("text")
+                .attr("class", "item-name-text")
+                .attr("x", d => d.width / 2)
+                .attr("y", d => d.type === 'controller' ? d.height / 2 : d.height * 0.25)
+                .style("text-anchor", "middle")
+                .style("dominant-baseline", "middle")
+                .style("pointer-events", "none")
+                .text(d => {
+                    if (d.type === 'panel') {
+                        const panelNum = parseInt(d.id.replace("panel-", "")) + 1;
+                        return `Panel ${panelNum}`;
+                    }
+                    if (d.type === 'battery') {
+                        const battNum = parseInt(d.id.replace("batt-", "")) + 1;
+                        return `Battery ${battNum}`;
+                    }
+                    if (d.type === 'controller') return "Controller";
+                    return d.id;
+                });
+
+            // Add specs text for panels
+            itemGroups.filter(d => d.type === 'panel')
+                .append("text")
+                .attr("class", "panel-text panel-specs-wmp")
+                .attr("x", d => d.width / 2)
+                .attr("y", d => d.height * 0.45)
+                .style("text-anchor", "middle")
+                .style("dominant-baseline", "middle")
+                .style("pointer-events", "none")
+                .text(d => `${d.specs.wmp}W`);
+
+            itemGroups.filter(d => d.type === 'panel')
+                .append("text")
+                .attr("class", "panel-text panel-specs-vmp")
+                .attr("x", d => d.width / 2)
+                .attr("y", d => d.height * 0.65)
+                .style("text-anchor", "middle")
+                .style("dominant-baseline", "middle")
+                .style("pointer-events", "none")
+                .text(d => `${d.specs.vmp}V, ${d.specs.imp}A`);
+
+            // Add specs text for batteries
+            itemGroups.filter(d => d.type === 'battery')
+                .append("text")
+                .attr("class", "battery-text battery-specs-voltage")
+                .attr("x", d => d.width / 2)
+                .attr("y", d => d.height * 0.35)
+                .style("text-anchor", "middle")
+                .style("dominant-baseline", "middle")
+                .style("pointer-events", "none")
+                .text(d => `${d.specs.voltage}V`);
+
+            itemGroups.filter(d => d.type === 'battery')
+                .append("text")
+                .attr("class", "battery-text battery-specs-ah")
+                .attr("x", d => d.width / 2)
+                .attr("y", d => d.height * 0.55)
+                .style("text-anchor", "middle")
+                .style("dominant-baseline", "middle")
+                .style("pointer-events", "none")
+                .text(d => `${d.specs.ah}Ah (${d.specs.kWh}kWh)`);
+
+            itemGroups.filter(d => d.type === 'battery')
+                .append("text")
+                .attr("class", "battery-text battery-specs-discharge")
+                .attr("x", d => d.width / 2)
+                .attr("y", d => d.height * 0.75)
+                .style("text-anchor", "middle")
+                .style("dominant-baseline", "middle")
+                .style("pointer-events", "none")
+                .text(d => `${d.specs.maxDischarge}A Max`);
+
+            // Add handles
+            itemGroups.each(function(itemData) {
+                const group = d3.select(this);
+                const handleData = Object.values(itemData.handles);
+
+                group.selectAll(".handle")
+                    .data(handleData, d_h => d_h.id)
+                    .enter()
+                    .append("circle")
+                    .attr("class", d_h => `handle ${d_h.polarity}`)
+                    .attr("r", handleRadius)
+                    .attr("cx", d_h => d_h.x)
+                    .attr("cy", d_h => d_h.y)
+                    .call(handleDrag);
+
+                group.selectAll(".handle-label")
+                    .data(handleData, d_h => d_h.id)
+                    .enter()
+                    .append("text")
+                    .attr("class", "handle-label")
+                    .attr("x", d_h => d_h.x + (d_h.x === 0 ? -handleRadius - 5 : handleRadius + 5))
+                    .attr("y", d_h => d_h.y + 4)
+                    .style("text-anchor", d_h => (d_h.x === 0 ? 'end' : 'start'))
+                    .text(d_h => d_h.label || (d_h.polarity === 'positive' ? '+' : '-'));
+            });
+
+            // Add delete button last (so it's on top)
+            const deleteButtons = itemGroups.append("g")
+                .attr("class", "delete-btn")
+                .attr("transform", d => `translate(${d.width - 20}, 10)`);
+
+            deleteButtons.append("circle")
+                .attr("r", 8)
+                .style("cursor", "pointer")
+                .on("mousedown", function(event, d) {
+                    event.stopPropagation();
+                })
+                .on("click", function(event, d) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    console.log("Delete button clicked for item:", d.id);
+                    
+                    // Remove the item from the data
+                    allItems = allItems.filter(i => i.id !== d.id);
+                    
+                    // Remove all connections involving this item
+                    connections = connections.filter(conn => {
+                        if (conn.sourceItemId === d.id || conn.targetItemId === d.id) {
+                            const otherItemId = conn.sourceItemId === d.id ? conn.targetItemId : conn.sourceItemId;
+                            const otherItem = allItems.find(i => i.id === otherItemId);
+                            if (otherItem) {
+                                Object.values(otherItem.handles).forEach(handle => {
+                                    handle.connectedTo = handle.connectedTo.filter(c => c.connectionId !== conn.id);
+                                });
+                            }
+                            return false;
+                        }
+                        return true;
+                    });
+
+                    // Clear selection if the deleted item was selected
+                    if (selectedItem && selectedItem.id === d.id) {
+                        selectItem(null);
+                    }
+
+                    // Remove the item group from the DOM immediately
+                    d3.select(this.parentNode.parentNode).remove();
+                    
+                    // Update specs and validation
+                    calculateTotalSpecs();
+                    calculateBatteryBankSpecs();
+                    
+                    // Force a re-render of the remaining items
+                    render();
+                });
+
+            deleteButtons.append("text")
+                .attr("dy", "0.3em")
+                .text("×");
+
+            // Add click handler to canvas to deselect items
+            svg.on("click", function(event) {
+                if (event.target === this) {
+                    selectItem(null);
+                }
+            });
+
+            // Add wires
+            svg.selectAll(".wire")
+                .data(connections, d => d.id)
+                .enter()
+                .append("path")
+                .attr("class", "wire")
+                .attr("d", d_conn => {
+                    const sourceItem = allItems.find(i => i.id === d_conn.sourceItemId);
+                    const sourceHandle = sourceItem ? Object.values(sourceItem.handles).find(h => h.id === d_conn.sourceHandleId) : null;
+                    const sourceAbsPos = sourceItem && sourceHandle ? getHandleAbsolutePos(d_conn.sourceItemId, d_conn.sourceHandleId) : null;
+                    const targetItem = allItems.find(i => i.id === d_conn.targetItemId);
+                    const targetHandle = targetItem ? Object.values(targetItem.handles).find(h => h.id === d_conn.targetHandleId) : null;
+                    const targetAbsPos = targetItem && targetHandle ? getHandleAbsolutePos(d_conn.targetItemId, d_conn.targetHandleId) : null;
+                    if (!sourceAbsPos || !targetAbsPos || !sourceHandle || !sourceItem || !targetHandle || !targetItem) return "";
+                    return generateBezierPath(sourceAbsPos, sourceHandle, sourceItem, targetAbsPos, targetHandle, targetItem);
+                })
+                .style("stroke", d_conn => {
+                    const sourceItem = allItems.find(i => i.id === d_conn.sourceItemId);
+                    const sourceHandle = sourceItem ? Object.values(sourceItem.handles).find(h => h.id === d_conn.sourceHandleId) : null;
+                    const targetItem = allItems.find(i => i.id === d_conn.targetItemId);
+                    const targetHandle = targetItem ? Object.values(targetItem.handles).find(h => h.id === d_conn.targetHandleId) : null;
+                    if (!sourceHandle || !targetHandle) return WIRE_COLOR_MIXED;
+                    if (sourceHandle.polarity === 'positive' && targetHandle.polarity === 'positive') return WIRE_COLOR_POS_POS;
+                    if (sourceHandle.polarity === 'negative' && targetHandle.polarity === 'negative') return WIRE_COLOR_NEG_NEG;
+                    return WIRE_COLOR_MIXED;
+                })
+                .style("stroke-width", d_conn => getWireStrokeWidth(d_conn))
+                .on("click", (event, d_conn) => deleteConnection(d_conn));
+
+            // Update specs and validation
+            calculateTotalSpecs();
+            calculateBatteryBankSpecs();
+            
+            // Always update total cost display, regardless of system completeness
+            d3.select("#total-system-cost").text(`$${calculateTotalSystemCost()}`);
+        }
+        
+        function deleteConnection(connToDelete) {
+            const sourceItem = allItems.find(i => i.id === connToDelete.sourceItemId);
+            const sourceHandle = sourceItem ? Object.values(sourceItem.handles).find(h => h.id === connToDelete.sourceHandleId) : null;
+            const targetItem = allItems.find(i => i.id === connToDelete.targetItemId);
+            const targetHandle = targetItem ? Object.values(targetItem.handles).find(h => h.id === connToDelete.targetHandleId) : null;
+            if (sourceHandle && Array.isArray(sourceHandle.connectedTo)) { 
+                sourceHandle.connectedTo = sourceHandle.connectedTo.filter(c => c.connectionId !== connToDelete.id);
+            }
+            if (targetHandle && Array.isArray(targetHandle.connectedTo)) { 
+                targetHandle.connectedTo = targetHandle.connectedTo.filter(c => c.connectionId !== connToDelete.id);
+            }
+            connections = connections.filter(c => c.id !== connToDelete.id);
+            
+            // Update specs and validation after deleting connection
+            calculateTotalSpecs();
+            calculateBatteryBankSpecs();
+            render();
+        }
+        function generateBezierPath(sAbs, sH, sI, tAbs, tH, tI) { /* ... (same) ... */ 
+             let c1x, c2x;
+            c1x = (sH.x === 0) ? sAbs.x - bezierOffset : sAbs.x + bezierOffset;
+            c2x = (tH.x === 0) ? tAbs.x - bezierOffset : tAbs.x + bezierOffset;
+            const c1y = sAbs.y; const c2y = tAbs.y;
+            return `M ${sAbs.x} ${sAbs.y} C ${c1x} ${c1y} ${c2x} ${c2y} ${tAbs.x} ${tAbs.y}`;
+        }
+        function getHandleAbsolutePos(itemId, handleId) { /* ... (same) ... */ 
+            const item = allItems.find(i => i.id === itemId);
+            if (!item) return { x: 0, y: 0 };
+            const handle = Object.values(item.handles).find(h => h.id === handleId);
+            if (!handle) return { x: item.x, y: item.y }; 
+            return { x: item.x + handle.x, y: item.y + handle.y };
+        }
+
+        // Add wire gauge constants with more precise specifications
+        const WIRE_GAUGE_SPECS = {
+            '2': { amps: 150, width: 8, name: '2 AWG' },
+            '4': { amps: 100, width: 6, name: '4 AWG' },
+            '6': { amps: 65, width: 5, name: '6 AWG' },
+            '8': { amps: 45, width: 4, name: '8 AWG' },
+            '10': { amps: 30, width: 3, name: '10 AWG' },
+            '12': { amps: 20, width: 2.5, name: '12 AWG' },
+            '14': { amps: 15, width: 2, name: '14 AWG' }
+        };
+
+        function getWireGaugeForAmps(amps) {
+            if (!amps || amps <= 0) {
+                return { gauge: '10', amps: 30, width: 3, name: '10 AWG' }; // Default to 10 AWG for zero/negative amps
+            }
+            
+            // Add 5A safety margin
+            const requiredAmps = amps + 5;
+            
+            // Sort gauges by ampacity in ascending order (smallest first)
+            const sortedGauges = Object.entries(WIRE_GAUGE_SPECS)
+                .sort((a, b) => a[1].amps - b[1].amps);
+            
+            // Find the smallest gauge that can handle the required current
+            for (const [gauge, spec] of sortedGauges) {
+                if (requiredAmps <= spec.amps) {
+                    return { gauge, ...spec };
+                }
+            }
+            
+            // If amps exceed all ratings, return the largest gauge
+            const largestGauge = sortedGauges[sortedGauges.length - 1];
+            return { gauge: largestGauge[0], ...largestGauge[1] };
+        }
+
+        function getWireStrokeWidth(connectionData) {
+            if (!connectionData) return WIRE_GAUGE_SPECS['10'].width;
+
+            const sourceItem = allItems.find(i => i.id === connectionData.sourceItemId);
+            const targetItem = allItems.find(i => i.id === connectionData.targetItemId);
+            const controller = allItems.find(item => item.type === 'controller');
+
+            if (!sourceItem || !targetItem) return WIRE_GAUGE_SPECS['10'].width;
+
+            // Determine if this is a battery connection
+            const isBatteryConnection = isBatteryWire(sourceItem, targetItem, connectionData);
+            
+            if (isBatteryConnection) {
+                return getBatteryWireWidth(controller);
+            } else {
+                return getSolarWireWidth();
+            }
+        }
+
+        function isBatteryWire(sourceItem, targetItem, connectionData) {
+            if (!sourceItem || !targetItem) return false;
+
+            // Direct battery connection
+            if (sourceItem.type === 'battery' || targetItem.type === 'battery') {
+                return true;
+            }
+
+            // Controller battery terminal connection
+            const sourceHandle = Object.values(sourceItem.handles).find(h => h.id === connectionData.sourceHandleId);
+            const targetHandle = Object.values(targetItem.handles).find(h => h.id === connectionData.targetHandleId);
+
+            if (sourceItem.type === 'controller' && sourceHandle) {
+                return sourceHandle.id.includes('-batt-');
+            }
+            if (targetItem.type === 'controller' && targetHandle) {
+                return targetHandle.id.includes('-batt-');
+            }
+
+            return false;
+        }
+
+        function getBatteryWireWidth(controller) {
+            if (!controller || !controller.specs) {
+                return WIRE_GAUGE_SPECS['10'].width;
+            }
+
+            let maxAmps = 0;
+            if (controller.subtype === 'hybrid_inverter') {
+                maxAmps = controller.specs.maxDCAmps || 0;
+            } else {
+                maxAmps = controller.specs.ratedChargeCurrent || 0;
+            }
+
+            const wireSpec = getWireGaugeForAmps(maxAmps);
+            return wireSpec.width;
+        }
+
+        function getSolarWireWidth() {
+            return WIRE_GAUGE_SPECS['10'].width;
+        }
+
+        function updateWireSpecsDisplay(arrayIsc) {
+            const solarWireSpec = WIRE_GAUGE_SPECS['10'];
+            const controller = allItems.find(item => item.type === 'controller');
+            let batteryWireSpec = { gauge: '10', amps: 30, width: 3, name: '10 AWG' };
+
+            // Update wire specs display
+            d3.select("#solar-wire-gauge").text(solarWireSpec.name);
+            d3.select("#solar-wire-amps").text(`${solarWireSpec.amps}`);
+            
+            // Check if this is an all-in-one controller
+            if (controller && (controller.subtype === 'all_in_one' || controller.specs.type === 'all_in_one')) {
+                d3.select("#battery-wire-gauge").text("Internal Wiring");
+                d3.select("#battery-wire-amps").text("");
+            } else {
+                if (controller && controller.specs) {
+                    let maxAmps = 0;
+                    if (controller.subtype === 'hybrid_inverter' || controller.specs.type === 'hybrid_inverter') {
+                        maxAmps = controller.specs.maxDCAmps || 0;
+                    } else {
+                        maxAmps = controller.specs.ratedChargeCurrent || 0;
+                    }
+                    batteryWireSpec = getWireGaugeForAmps(maxAmps);
+                }
+                d3.select("#battery-wire-gauge").text(batteryWireSpec.name);
+                d3.select("#battery-wire-amps").text(`${batteryWireSpec.amps}`);
+            }
+
+            // Add wire gauge warning if array current exceeds 10 AWG rating
+            if (arrayIsc > solarWireSpec.amps) {
+                const statusDiv = d3.select("#status-messages");
+                const existingWarning = statusDiv.select(".wire-gauge-warning");
+                if (existingWarning.empty()) {
+                    statusDiv.append("p")
+                        .attr("class", "status-warning wire-gauge-warning")
+                        .style("color", "#f1c40f")
+                        .text(`Warning: Array current (${arrayIsc.toFixed(2)}A) exceeds 10 AWG wire rating (${solarWireSpec.amps}A). Consider using larger wire gauge.`);
+                } else {
+                    existingWarning.text(`Warning: Array current (${arrayIsc.toFixed(2)}A) exceeds 10 AWG wire rating (${solarWireSpec.amps}A). Consider using larger wire gauge.`);
+                }
+            } else {
+                d3.select(".wire-gauge-warning").remove();
+            }
+        }
+
+        // Add controller type constants
+        const CONTROLLER_TYPES = {
+            CHARGE_CONTROLLER: 'charge_controller',
+            HYBRID_INVERTER: 'hybrid_inverter',
+            ALL_IN_ONE: 'all_in_one'
+        };
+
+        // Add validation status constants
+        const VALIDATION_STATUS = {
+            OPTIMAL: 'optimal',
+            SUBOPTIMAL: 'suboptimal',
+            ERROR: 'error',
+            OVERLOAD: 'overload'
+        };
+
+        // Add status colors
+        const STATUS_COLORS = {
+            optimal: '#2ecc71',      // Green
+            suboptimal: '#f1c40f',   // Yellow
+            error: '#e67e22',        // Orange
+            overload: '#e74c3c'      // Red
+        };
+
+        function calculateTotalSpecs() {
+            const currentPanels = allItems.filter(item => item.type === 'panel');
+            if (currentPanels.length === 0) {
+                updateSpecsDisplay(0, 0, 0, 0, "N/A", 0);
+                performValidation(0, 0, 0); 
+                return;
+            }
+
+            const connectedPanels = findConnectedPanels(currentPanels);
+            const controller = allItems.find(item => item.type === 'controller');
+            
+            if (!controller || !isArrayConnectedToController(connectedPanels, controller)) {
+                updateSpecsDisplay(0, 0, 0, 0, "Not Connected", 0);
+                performValidation(0, 0, 0);
+                return;
+            }
+
+            const seriesStrings = findSeriesStrings(connectedPanels);
+            const arraySpecs = calculateArraySpecifications(seriesStrings);
+            
+            // Calculate actual power output considering limitations
+            const batteryVoltage = parseFloat(d3.select("#total-batt-voltage").text()) || 0;
+            const effectiveMaxPower = calculateEffectiveMaxPower(controller, batteryVoltage);
+            const actualPowerOutput = Math.min(arraySpecs.totalWmp, effectiveMaxPower);
+            
+            // Calculate daily energy output (4.5 hours of effective daylight)
+            const dailyEnergyOutput = (actualPowerOutput * 4.5) / 1000; // Convert to kWh
+            
+            updateSpecsDisplay(
+                arraySpecs.totalWmp,
+                arraySpecs.arrayVmp,
+                arraySpecs.arrayVoc,
+                arraySpecs.arrayIsc,
+                arraySpecs.configType,
+                dailyEnergyOutput
+            );
+            
+            updateWireSpecsDisplay(arraySpecs.arrayIsc);
+            performValidation(arraySpecs.totalWmp, arraySpecs.arrayVoc, arraySpecs.arrayIsc);
+
+            // Calculate and update system specs
+            updateSystemSpecs(arraySpecs.totalWmp, arraySpecs.arrayVoc, arraySpecs.arrayIsc);
+        }
+
+        function updateSystemSpecs(arrayWmp, arrayVoc, arrayIsc) {
+            // Get controller specs
+            const controller = allItems.find(item => item.id === CONTROLLER_ID);
+            if (!controller) return;
+
+            // Get battery voltage
+            const batteryVoltage = parseFloat(d3.select("#total-batt-voltage").text()) || 0;
+
+            // Calculate rated array capacity (based on actual array power)
+            const ratedArrayCapacity = arrayWmp;
+
+            // Calculate max array capacity based on controller type
+            let maxArrayCapacity;
+            if (controller.subtype === 'hybrid_inverter' || controller.subtype === 'all_in_one') {
+                // For hybrid inverters and all-in-ones, use the controller's max Wmp
+                maxArrayCapacity = Math.min(
+                    controller.specs.maxWmp,
+                    ratedArrayCapacity // Don't exceed actual array power
+                );
+            } else {
+                // For charge controllers, use battery voltage limitation
+                maxArrayCapacity = Math.min(
+                    controller.specs.maxWmp,
+                    batteryVoltage * controller.specs.ratedChargeCurrent,
+                    ratedArrayCapacity // Don't exceed actual array power
+                );
+            }
+
+            // Calculate battery capacity
+            const batteryCapacity = calculateBatteryCapacity();
+
+            // Calculate estimated daily solar output based on max array capacity
+            const dailySolarOutput = calculateDailySolarOutput(maxArrayCapacity);
+
+            // Update the display (without unit suffixes since they're in the HTML)
+            d3.select("#rated-array-capacity").text((ratedArrayCapacity / 1000).toFixed(1));
+            d3.select("#max-array-capacity").text((maxArrayCapacity / 1000).toFixed(1));
+            d3.select("#battery-capacity").text(batteryCapacity.toFixed(1));
+            d3.select("#daily-solar-output").text(dailySolarOutput.toFixed(1));
+            d3.select("#total-system-cost").text(`$${calculateTotalSystemCost()}`);
+        }
+
+        function calculateBatteryCapacity() {
+            const batteries = allItems.filter(item => item.type === 'battery');
+            let totalCapacity = 0;
+
+            batteries.forEach(battery => {
+                const voltage = battery.specs.voltage || 0;
+                const ah = battery.specs.ah || 0;
+                totalCapacity += (voltage * ah) / 1000; // Convert to kWh
+            });
+
+            return totalCapacity;
+        }
+
+        function calculateDailySolarOutput(arrayWmp) {
+            // Basic estimation: 4-5 peak sun hours per day
+            // Using 4.5 as a conservative average
+            const peakSunHours = 4.5;
+            return (arrayWmp * peakSunHours) / 1000; // Convert to kWh
+        }
+
+        function findConnectedPanels(panels) {
+            const connectedPanels = new Set();
+            const panelMap = new Map(panels.map(p => [p.id, p]));
+
+            function traverseConnections(panel) {
+                if (connectedPanels.has(panel.id)) return;
+                connectedPanels.add(panel.id);
+
+                ['positive', 'negative'].forEach(polarity => {
+                    const handle = panel.handles[polarity];
+                    handle.connectedTo.forEach(conn => {
+                        if (conn.itemId.startsWith('panel-')) {
+                            const connectedPanel = panelMap.get(conn.itemId);
+                            if (connectedPanel) {
+                                const connectedHandle = Object.values(connectedPanel.handles)
+                                    .find(h => h.id === conn.handleId);
+                                if (connectedHandle && 
+                                    ((polarity === 'positive' && connectedHandle.polarity === 'negative') ||
+                                     (polarity === 'negative' && connectedHandle.polarity === 'positive'))) {
+                                    traverseConnections(connectedPanel);
+                                }
+                            }
+                        }
+                    });
+                });
+            }
+
+            panels.forEach(panel => {
+                if (panel.handles.positive.connectedTo.length > 0 || 
+                    panel.handles.negative.connectedTo.length > 0) {
+                    traverseConnections(panel);
+                }
+            });
+
+            return panels.filter(p => connectedPanels.has(p.id));
+        }
+
+        function isArrayConnectedToController(panels, controller) {
+            if (!controller) return false;
+
+            // First, find all series strings
+            const seriesStrings = findSeriesStrings(panels);
+            
+            // Check if any string is connected to the controller
+            for (const string of seriesStrings) {
+                let hasPositiveConnection = false;
+                let hasNegativeConnection = false;
+                
+                // Check each panel in the string for controller connections
+                for (const panel of string) {
+                    // Check positive connections
+                    for (const conn of panel.handles.positive.connectedTo) {
+                        if (conn.itemId === controller.id) {
+                            hasPositiveConnection = true;
+                        }
+                    }
+                    // Check negative connections
+                    for (const conn of panel.handles.negative.connectedTo) {
+                        if (conn.itemId === controller.id) {
+                            hasNegativeConnection = true;
+                        }
+                    }
+                }
+                
+                // If both positive and negative are connected, the array is connected
+                if (hasPositiveConnection && hasNegativeConnection) {
+                    return true;
+                }
+            }
+            
+            return false;
+        }
+
+        function findNextPanelInSeries(currentPanel, allPanels) {
+            const panelMap = new Map(allPanels.map(p => [p.id, p]));
+            for (const conn of currentPanel.handles.negative.connectedTo) {
+                if (conn.itemId.startsWith('panel-')) {
+                    const nextPanel = panelMap.get(conn.itemId);
+                    if (nextPanel) {
+                        const nextHandle = Object.values(nextPanel.handles)
+                            .find(h => h.id === conn.handleId);
+                        if (nextHandle && nextHandle.polarity === 'positive') {
+                            return nextPanel;
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+
+        function findSeriesStrings(panels) {
+            const seriesStrings = [];
+            const visitedPanels = new Set();
+            const panelMap = new Map(panels.map(p => [p.id, p]));
+
+            // Helper function to find all panels connected in parallel
+            function findParallelPanels(panel, visited) {
+                const parallelPanels = new Set([panel]);
+                const toVisit = [panel];
+                
+                while (toVisit.length > 0) {
+                    const currentPanel = toVisit.pop();
+                    if (!visited.has(currentPanel.id)) {
+                        visited.add(currentPanel.id);
+                        
+                        // Check both positive and negative connections for parallel panels
+                        ['positive', 'negative'].forEach(polarity => {
+                            currentPanel.handles[polarity].connectedTo.forEach(conn => {
+                                if (conn.itemId.startsWith('panel-')) {
+                                    const connectedPanel = panelMap.get(conn.itemId);
+                                    if (connectedPanel && !visited.has(connectedPanel.id)) {
+                                        const connectedHandle = Object.values(connectedPanel.handles)
+                                            .find(h => h.id === conn.handleId);
+                                        if (connectedHandle && connectedHandle.polarity === polarity) {
+                                            parallelPanels.add(connectedPanel);
+                                            toVisit.push(connectedPanel);
+                                        }
+                                    }
+                                }
+                            });
+                        });
+                    }
+                }
+                return Array.from(parallelPanels);
+            }
+
+            // Process each panel
+            for (const panel of panels) {
+                if (visitedPanels.has(panel.id)) continue;
+
+                // Find all panels connected in parallel
+                const parallelPanels = findParallelPanels(panel, visitedPanels);
+                
+                // For each parallel panel, find its series string
+                parallelPanels.forEach(parallelPanel => {
+                    let isStartNode = true;
+                    for (const conn of parallelPanel.handles.positive.connectedTo) {
+                        if (conn.itemId.startsWith('panel-')) {
+                            const connectedPanel = panelMap.get(conn.itemId);
+                            if (connectedPanel) {
+                                const connectedHandle = Object.values(connectedPanel.handles)
+                                    .find(h => h.id === conn.handleId);
+                                if (connectedHandle && connectedHandle.polarity === 'negative') {
+                                    isStartNode = false;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if (isStartNode) {
+                        const seriesString = [];
+                        let currentPanel = parallelPanel;
+                        let path = new Set();
+
+                        while (currentPanel && !path.has(currentPanel.id)) {
+                            seriesString.push(currentPanel);
+                            path.add(currentPanel.id);
+                            visitedPanels.add(currentPanel.id);
+
+                            let nextPanel = null;
+                            for (const conn of currentPanel.handles.negative.connectedTo) {
+                                if (conn.itemId.startsWith('panel-')) {
+                                    const nextPanelCandidate = panelMap.get(conn.itemId);
+                                    if (nextPanelCandidate && !path.has(nextPanelCandidate.id)) {
+                                        const nextHandle = Object.values(nextPanelCandidate.handles)
+                                            .find(h => h.id === conn.handleId);
+                                        if (nextHandle && nextHandle.polarity === 'positive') {
+                                            nextPanel = nextPanelCandidate;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            currentPanel = nextPanel;
+                        }
+
+                        if (seriesString.length > 0) {
+                            seriesStrings.push(seriesString);
+                        }
+                    }
+                });
+            }
+
+            // Add any remaining unvisited panels as individual strings
+            panels.forEach(panel => {
+                if (!visitedPanels.has(panel.id)) {
+                    seriesStrings.push([panel]);
+                    visitedPanels.add(panel.id);
+                }
+            });
+
+            return seriesStrings;
+        }
+
+        function calculateArraySpecifications(seriesStrings) {
+            if (seriesStrings.length === 0) {
+                return {
+                    totalWmp: 0,
+                    arrayVmp: 0,
+                    arrayVoc: 0,
+                    arrayIsc: 0,
+                    configType: "No Connected Panels"
+                };
+            }
+
+            // Calculate specifications for each string
+            const stringDetails = seriesStrings.map(string => {
+                let stringVmp = 0, stringVoc = 0;
+                let stringImp = Infinity, stringIsc = Infinity;
+
+                string.forEach(panel => {
+                    stringVmp += panel.specs.vmp;
+                    stringVoc += panel.specs.voc;
+                    const panelImp = panel.specs.imp || (panel.specs.wmp / panel.specs.vmp);
+                    stringImp = Math.min(stringImp, panelImp);
+                    stringIsc = Math.min(stringIsc, panel.specs.isc);
+                });
+
+                // Calculate string power using the total string voltage and current
+                const stringWmp = stringVmp * stringImp;
+
+                return {
+                    panels: string,
+                    vmp: stringVmp,
+                    voc: stringVoc,
+                    imp: stringImp,
+                    isc: stringIsc,
+                    wmp: stringWmp
+                };
+            });
+
+            // For parallel strings:
+            // - Voltage remains the same as any string
+            // - Current adds up from each string
+            // - Power is the sum of each string's power
+            const arrayVmp = Math.round(stringDetails[0].vmp * 100) / 100;
+            const arrayVoc = Math.round(stringDetails[0].voc * 100) / 100;
+            let arrayIsc = 0;
+            let totalWmp = 0;
+            let vmpMismatch = false;
+
+            // Check for voltage mismatch and calculate totals
+            stringDetails.forEach(detail => {
+                arrayIsc += detail.isc;  // Current adds up in parallel
+                totalWmp += detail.wmp;  // Power adds up in parallel
+                if (stringDetails.length > 1 && 
+                    Math.abs(detail.vmp - arrayVmp) > arrayVmp * 0.1) {
+                    vmpMismatch = true;
+                }
+            });
+
+            totalWmp = Math.round(totalWmp);
+
+            // Determine configuration type
+            let configType = determineArrayConfiguration(stringDetails, vmpMismatch);
+
+            // Check if the array is connected to the controller
+            const controller = allItems.find(item => item.id === CONTROLLER_ID);
+            if (!controller || !isArrayConnectedToController(seriesStrings.flat(), controller)) {
+                configType += " (Not Connected)";
+            }
+
+            return {
+                totalWmp,
+                arrayVmp,
+                arrayVoc,
+                arrayIsc,
+                configType
+            };
+        }
+
+        function determineArrayConfiguration(stringDetails, vmpMismatch) {
+            const numStrings = stringDetails.length;
+            if (numStrings === 1) {
+                return `${stringDetails[0].panels.length}-Series`;
+            }
+
+            const firstStringLength = stringDetails[0].panels.length;
+            const allSameLength = stringDetails.every(s => s.panels.length === firstStringLength);
+            
+            let config = allSameLength ? 
+                `${numStrings}-Parallel ${firstStringLength}-Series` : 
+                `${numStrings}-Parallel (mixed Series)`;
+
+            if (vmpMismatch) config += " (Vmp Mismatch!)";
+            return config;
+        }
+
+        function performValidation(arrayWmp, arrayVoc, arrayIsc) {
+            const statusDiv = d3.select("#status-messages");
+            statusDiv.html("");
+            
+            const controller = allItems.find(item => item.id === CONTROLLER_ID);
+            if (!controller) {
+                addStatusMessage("No charge controller added.", VALIDATION_STATUS.ERROR);
+                updateControllerAppearance(CONTROLLER_COLOR_DISCONNECTED, CONTROLLER_STROKE_DISCONNECTED);
+                return;
+            }
+
+            const messages = [];
+            let status = VALIDATION_STATUS.OPTIMAL;
+            let isOverloaded = false;
+            let isVoltageOverload = false;
+            let isSystemValid = true;
+
+            // Check PV connectivity
+            if (!isPVFullyConnected(controller)) {
+                status = VALIDATION_STATUS.ERROR;
+                isSystemValid = false;
+                messages.push(createStatusMessage(
+                    "Error: Controller PV input not fully connected.",
+                    VALIDATION_STATUS.ERROR
+                ));
+            }
+
+            // Check battery connectivity and voltage compatibility
+            if (controller.subtype !== CONTROLLER_TYPES.ALL_IN_ONE) {
+                const batteryValidation = validateBatteryConnections(controller);
+                if (batteryValidation.status !== VALIDATION_STATUS.OPTIMAL) {
+                    status = batteryValidation.status;
+                    isSystemValid = false;
+                    messages.push(batteryValidation.message);
+                }
+            }
+
+            // Check for overload conditions
+            const overloadValidation = validateOverloadConditions(controller, arrayVoc, arrayIsc);
+            if (overloadValidation.status === VALIDATION_STATUS.OVERLOAD) {
+                status = VALIDATION_STATUS.OVERLOAD;
+                isOverloaded = true;
+                isVoltageOverload = overloadValidation.isVoltageOverload;
+                isSystemValid = false;
+                messages.push(overloadValidation.message);
+            }
+
+            // Calculate both optimization scores
+            const batteryVoltage = parseFloat(d3.select("#total-batt-voltage").text()) || 0;
+            const systemOptimizationScore = calculateSystemOptimizationScore(controller, arrayWmp, arrayVoc, arrayIsc);
+            const configOptimizationScore = calculateConfigOptimizationScore(controller, arrayWmp, batteryVoltage);
+            
+            // Add system status message if everything is valid
+            if (isSystemValid) {
+                messages.unshift(createStatusMessage("System Operational", VALIDATION_STATUS.OPTIMAL));
+            }
+
+            // Add both optimization scores
+            messages.unshift(createStatusMessage(
+                `System Optimization Score: ${systemOptimizationScore.toFixed(1)}%<br>` +
+                `Configuration Optimization Score: ${configOptimizationScore.toFixed(1)}%`,
+                getScoreStatus(Math.min(systemOptimizationScore, configOptimizationScore))
+            ));
+            
+            // Add suboptimal warnings
+            const suboptimalWarnings = checkSuboptimalConditions(controller, arrayWmp, arrayVoc, arrayIsc, systemOptimizationScore);
+            if (suboptimalWarnings.length > 0) {
+                suboptimalWarnings.forEach(warning => {
+                    messages.push(createStatusMessage(warning, VALIDATION_STATUS.SUBOPTIMAL));
+                });
+            }
+
+            // Update controller appearance and display messages
+            updateControllerAppearance(status, isOverloaded, isVoltageOverload);
+            statusDiv.html(messages.join(""));
+        }
+
+        function calculateSystemOptimizationScore(controller, arrayWmp, arrayVoc, arrayIsc) {
+            const ctrl = controller.specs;
+            const highestSupportedVoltage = Math.max(...controller.specs.supportedVoltages);
+            const absoluteMaxPower = highestSupportedVoltage * controller.specs.ratedChargeCurrent;
+            
+            // Calculate score based on current power vs maximum power
+            const powerScore = (arrayWmp / absoluteMaxPower) * 100;
+            
+            // Cap the score at 100%
+            return Math.min(powerScore, 100);
+        }
+
+        function calculateConfigOptimizationScore(controller, arrayWmp, batteryVoltage) {
+            if (!controller || !batteryVoltage) return 0;
+            
+            // For all-in-one controllers, use their internal battery voltage
+            if (controller.subtype === CONTROLLER_TYPES.ALL_IN_ONE) {
+                batteryVoltage = controller.specs.internalBatteryVoltage || 48;
+            }
+            
+            // Calculate effective maximum power based on current battery voltage
+            const maxChargeCurrent = controller.specs.ratedChargeCurrent || 0;
+            const effectiveMaxPower = batteryVoltage * maxChargeCurrent;
+            
+            // Calculate score based on current power vs effective maximum
+            const score = (arrayWmp / effectiveMaxPower) * 100;
+            
+            // Cap the score at 100%
+            return Math.min(score, 100);
+        }
+
+        function calculateEffectiveMaxPower(controller, batteryVoltage) {
+            if (!controller) return 0;
+            
+            // For hybrid inverters and all-in-ones, use the controller's max Wmp
+            if (controller.subtype === CONTROLLER_TYPES.HYBRID_INVERTER || 
+                controller.subtype === CONTROLLER_TYPES.ALL_IN_ONE) {
+                return controller.specs.maxWmp || 0;
+            }
+            
+            // For charge controllers, calculate based on battery voltage and controller current rating
+            const maxChargeCurrent = controller.specs.ratedChargeCurrent || 0;
+            return batteryVoltage * maxChargeCurrent;
+        }
+
+        function checkSuboptimalConditions(controller, arrayWmp, arrayVoc, arrayIsc, optimizationScore) {
+            const warnings = [];
+            const ctrl = controller.specs;
+            const batteryVoltage = parseFloat(d3.select("#total-batt-voltage").text()) || 0;
+            
+            // Calculate effective maximum power based on battery voltage
+            const effectiveMaxPower = calculateEffectiveMaxPower(controller, batteryVoltage);
+            
+            // Calculate absolute maximum power
+            const highestSupportedVoltage = Math.max(...controller.specs.supportedVoltages);
+            const absoluteMaxPower = highestSupportedVoltage * controller.specs.ratedChargeCurrent;
+            
+            // Check for underutilization
+            if (optimizationScore < 50) {
+                warnings.push(`System is underutilized (${optimizationScore.toFixed(1)}% of capacity)`);
+            }
+            
+            // Check for power optimization with voltage limitation warning
+            const powerUtilization = (arrayWmp / effectiveMaxPower) * 100;
+            if (powerUtilization < 70) {
+                let warning = `Array power (${arrayWmp.toFixed(1)}W) is well below maximum`;
+                if (effectiveMaxPower < absoluteMaxPower) {
+                    warning += ` (limited to ${effectiveMaxPower.toFixed(1)}W by ${batteryVoltage}V battery)`;
+                } else {
+                    warning += ` (${absoluteMaxPower.toFixed(1)}W)`;
+                }
+                warnings.push(warning);
+            }
+            
+            // Add voltage limitation warning if applicable
+            if (effectiveMaxPower < absoluteMaxPower) {
+                warnings.push(`System power limited to ${effectiveMaxPower.toFixed(1)}W by ${batteryVoltage}V battery configuration (Max: ${absoluteMaxPower.toFixed(1)}W at ${highestSupportedVoltage}V)`);
+            }
+            
+            return warnings;
+        }
+
+        function getScoreStatus(score) {
+            if (score >= 90) return VALIDATION_STATUS.OPTIMAL;
+            if (score >= 70) return VALIDATION_STATUS.SUBOPTIMAL;
+            return VALIDATION_STATUS.ERROR;
+        }
+
+        function isPVFullyConnected(controller) {
+            return controller.handles.pvPositive.connectedTo.length > 0 && 
+                   controller.handles.pvNegative.connectedTo.length > 0;
+        }
+
+        function validateBatteryConnections(controller) {
+            const batteryPositiveConnected = controller.handles.batteryPositive.connectedTo.length > 0;
+            const batteryNegativeConnected = controller.handles.batteryNegative.connectedTo.length > 0;
+
+            if (!batteryPositiveConnected || !batteryNegativeConnected) {
+                return {
+                    status: VALIDATION_STATUS.ERROR,
+                    message: createStatusMessage(
+                        "Error: Battery not connected to controller.",
+                        VALIDATION_STATUS.ERROR
+                    )
+                };
+            }
+
+            const batteryVoltage = parseFloat(d3.select("#total-batt-voltage").text()) || 0;
+            if (batteryVoltage > 0 && !controller.specs.supportedVoltages.includes(batteryVoltage)) {
+                return {
+                    status: VALIDATION_STATUS.ERROR,
+                    message: createStatusMessage(
+                        `Error: Battery voltage (${batteryVoltage}V) not supported by controller.<br>` +
+                        `Supported voltages: ${controller.specs.supportedVoltages.join('V, ')}V`,
+                        VALIDATION_STATUS.ERROR
+                    )
+                };
+            }
+
+            return { status: VALIDATION_STATUS.OPTIMAL };
+        }
+
+        function validateOverloadConditions(controller, arrayVoc, arrayIsc) {
+            const messages = [];
+            let isVoltageOverload = false;
+
+            if (arrayVoc > controller.specs.maxVoc) {
+                messages.push(createStatusMessage(
+                    `OVERLOAD:<br>Array Voc (${arrayVoc.toFixed(2)}V) > Controller Max Voc (${controller.specs.maxVoc}V)`,
+                    VALIDATION_STATUS.OVERLOAD
+                ));
+                isVoltageOverload = true;
+            }
+
+            if (arrayIsc > controller.specs.maxIsc) {
+                messages.push(createStatusMessage(
+                    `OVERLOAD:<br>Array Isc (${arrayIsc.toFixed(2)}A) > Controller Max Isc (${controller.specs.maxIsc}A)`,
+                    VALIDATION_STATUS.OVERLOAD
+                ));
+            }
+
+            return {
+                status: messages.length > 0 ? VALIDATION_STATUS.OVERLOAD : VALIDATION_STATUS.OPTIMAL,
+                message: messages.join(""),
+                isVoltageOverload
+            };
+        }
+
+        function createStatusMessage(text, status) {
+            return `<p class="status-${status}" style="color: ${STATUS_COLORS[status]}">${text}</p>`;
+        }
+
+        function updateControllerAppearance(status, isOverloaded = false, isVoltageOverload = false) {
+            const controllerGroupSelection = svg.selectAll(".item-group.controller")
+                .filter(d => d.id === CONTROLLER_ID);
+            const controllerRectSelection = controllerGroupSelection.select("rect.controller-rect");
+            const flamesGroupSelection = controllerGroupSelection.select(".flames-group");
+            const overloadTextSelection = controllerGroupSelection.select(".overload-text");
+
+            if (overloadAnimationTimer) {
+                overloadAnimationTimer.stop();
+                overloadAnimationTimer = null;
+            }
+            if (selfDestructTimeout) {
+                clearTimeout(selfDestructTimeout);
+                selfDestructTimeout = null;
+            }
+            if (!flamesGroupSelection.empty()) flamesGroupSelection.style("display", "none");
+            if (!overloadTextSelection.empty()) overloadTextSelection.style("display", "none");
+
+            if (!controllerRectSelection.empty()) {
+                switch(status) {
+                    case VALIDATION_STATUS.OPTIMAL:
+                        controllerRectSelection
+                            .style("fill", CONTROLLER_COLOR_OK)
+                            .style("stroke", CONTROLLER_STROKE_OK);
+                        break;
+                    case VALIDATION_STATUS.SUBOPTIMAL:
+                        controllerRectSelection
+                            .style("fill", "#f1c40f")
+                            .style("stroke", "#d4ac0d");
+                        break;
+                    case VALIDATION_STATUS.ERROR:
+                        controllerRectSelection
+                            .style("fill", CONTROLLER_COLOR_DISCONNECTED)
+                            .style("stroke", CONTROLLER_STROKE_DISCONNECTED);
+                        break;
+                    case VALIDATION_STATUS.OVERLOAD:
+                        controllerRectSelection
+                            .style("fill", CONTROLLER_COLOR_ERROR)
+                            .style("stroke", CONTROLLER_STROKE_ERROR);
+                        if (isVoltageOverload) {
+                            if (!flamesGroupSelection.empty()) {
+                                flamesGroupSelection.style("display", null);
+                                if (!overloadAnimationTimer) {
+                                    overloadAnimationTimer = d3.interval(
+                                        () => animateSparks(flamesGroupSelection, controller),
+                                        100
+                                    );
+                                }
+                            }
+                            if (!overloadTextSelection.empty()) {
+                                overloadTextSelection.style("display", null);
+                            }
+                            if (!selfDestructTimeout) {
+                                selfDestructTimeout = setTimeout(destroyController, selfDestructDelay);
+                            }
+                        }
+                        break;
+                }
+            }
+        }
+
+        function updateSpecsDisplay(wmp, vmp, voc, isc, config, dailyEnergy) {
+            const controller = allItems.find(item => item.id === CONTROLLER_ID);
+            const maxVoc = controller?.specs?.maxVoc || 0;
+            const maxIsc = controller?.specs?.maxIsc || 0;
+            const batteryVoltage = parseFloat(d3.select("#total-batt-voltage").text()) || 0;
+            
+            // Calculate effective maximum power based on battery voltage
+            const effectiveMaxPower = calculateEffectiveMaxPower(controller, batteryVoltage);
+            
+            // Calculate absolute maximum power
+            let absoluteMaxPower = 0;
+            if (controller && controller.specs) {
+                const highestSupportedVoltage = Math.max(...controller.specs.supportedVoltages);
+                const maxChargeCurrent = controller.specs.ratedChargeCurrent || 0;
+                absoluteMaxPower = highestSupportedVoltage * maxChargeCurrent;
+            }
+
+            // Helper function to determine color based on current and max values
+            function getValueColor(current, max, isVoltage = false) {
+                if (current === 0 || max === 0) return 'inherit';
+                
+                if (isVoltage) {
+                    // Special voltage logic
+                    if (current > max) return '#e74c3c'; // Red if exceeding max voltage
+                    if (current >= max * 0.95) return '#f1c40f'; // Yellow if within 5% of max
+                    return '#2ecc71'; // Green if below 95% of max
+                } else {
+                    // Original logic for power and current
+                    const percentage = (current / max) * 100;
+                    if (percentage > 120) return '#e74c3c'; // Red for >120%
+                    if (percentage > 100) return '#f1c40f'; // Yellow for 100-120%
+                    return '#2ecc71'; // Green for <100%
+                }
+            }
+
+            // Update current values with color coding
+            const wmpElement = d3.select("#total-wmp");
+            const vocElement = d3.select("#total-voc");
+            const iscElement = d3.select("#total-isc");
+            const dailyEnergyElement = d3.select("#daily-energy");
+
+            wmpElement
+                .text(parseFloat(wmp || 0).toFixed(2))
+                .style("color", getValueColor(wmp, effectiveMaxPower));
+
+            vocElement
+                .text(parseFloat(voc || 0).toFixed(2))
+                .style("color", getValueColor(voc, maxVoc, true));
+
+            iscElement
+                .text(parseFloat(isc || 0).toFixed(2))
+                .style("color", getValueColor(isc, maxIsc));
+
+            dailyEnergyElement
+                .text(parseFloat(dailyEnergy || 0).toFixed(2));
+
+            // Update max values with voltage information based on controller type
+            if (controller) {
+                if (controller.subtype === CONTROLLER_TYPES.CHARGE_CONTROLLER) {
+                    d3.select("#max-wmp").text(`${parseFloat(effectiveMaxPower).toFixed(0)}W Max @ ${batteryVoltage}V`);
+                } else {
+                    // For hybrid inverters and all-in-ones, don't show voltage
+                    d3.select("#max-wmp").text(`${parseFloat(effectiveMaxPower).toFixed(0)}W Max`);
+                }
+            } else {
+                d3.select("#max-wmp").text("0W Max");
+            }
+            
+            d3.select("#max-voc").text(parseFloat(maxVoc).toFixed(0));
+            d3.select("#max-isc").text(parseFloat(maxIsc).toFixed(1));
+            d3.select("#config-type").text(config);
+        }
+
+        function calculateBatteryBankSpecs() {
+            const currentBatteries = allItems.filter(item => item.type === 'battery');
+            const controller = allItems.find(item => item.id === CONTROLLER_ID);
+            
+            if (currentBatteries.length === 0 && (!controller || controller.subtype !== 'all_in_one')) {
+                updateBatterySpecsDisplay(0, 0, 0, 0, "N/A");
+                return;
+            }
+
+            // Handle all-in-one controller case
+            if (controller && controller.subtype === 'all_in_one') {
+                const internalBatteryKWh = controller.specs.internalBatteryKWh || 0;
+                const internalBatteryVoltage = controller.specs.internalBatteryVoltage || 48;
+                const internalBatteryAh = (internalBatteryKWh * 1000) / internalBatteryVoltage;
+                const internalBatteryMaxCurrent = controller.specs.maxDCAmps || 0;
+                
+                updateBatterySpecsDisplay(
+                    internalBatteryVoltage,
+                    internalBatteryAh,
+                    internalBatteryKWh,
+                    internalBatteryMaxCurrent,
+                    "Internal Battery"
+                );
+                return;
+            }
+
+            // Check if any batteries are connected to the controller
+            let isConnectedToController = false;
+            if (controller) {
+                for (const battery of currentBatteries) {
+                    const posHandle = battery.handles.positive;
+                    const negHandle = battery.handles.negative;
+                    
+                    for (const conn of posHandle.connectedTo) {
+                        if (conn.itemId === controller.id) {
+                            isConnectedToController = true;
+                            break;
+                        }
+                    }
+                    if (!isConnectedToController) {
+                        for (const conn of negHandle.connectedTo) {
+                            if (conn.itemId === controller.id) {
+                                isConnectedToController = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (isConnectedToController) break;
+                }
+            }
+
+            // If no batteries are connected to the controller, show zeros
+            if (!isConnectedToController) {
+                updateBatterySpecsDisplay(0, 0, 0, 0, "Not Connected");
+                return;
+            }
+
+            // Rest of the existing battery bank calculation code...
+            const batteryMap = new Map(currentBatteries.map(b => [b.id, b]));
+            let visitedBatteries = new Set();
+            let seriesStrings = [];
+            for (const battery of currentBatteries) {
+                if (visitedBatteries.has(battery.id)) continue;
+                let isStartNode = true;
+                const posHandle = battery.handles.positive;
+                if (posHandle.connectedTo.length > 0) {
+                    for (const conn of posHandle.connectedTo) {
+                        if (conn.itemId.startsWith('batt-')) {
+                            const connectedToBattery = batteryMap.get(conn.itemId);
+                            if (connectedToBattery) {
+                                const connectedToHandleDetails = Object.values(connectedToBattery.handles).find(h => h.id === conn.handleId);
+                                if (connectedToHandleDetails && connectedToHandleDetails.polarity === 'negative') {
+                                    isStartNode = false; break;
+                                }
+                            }
+                        }
+                    }
+                }
+                if (isStartNode) {
+                    let currentString = []; let currentBatteryInString = battery; let path = new Set();
+                    while (currentBatteryInString && !path.has(currentBatteryInString.id)) { 
+                        currentString.push(currentBatteryInString);
+                        path.add(currentBatteryInString.id);
+                        const negHandle = currentBatteryInString.handles.negative;
+                        let nextBatteryInSeriesFound = null;
+                        if (negHandle.connectedTo.length > 0) {
+                            for (const conn of negHandle.connectedTo) {
+                                if (conn.itemId.startsWith('batt-')) {
+                                    const nextBattCandidate = batteryMap.get(conn.itemId);
+                                    if (nextBattCandidate && !path.has(nextBattCandidate.id)) {
+                                        const nextHandleCandidate = Object.values(nextBattCandidate.handles).find(h => h.id === conn.handleId);
+                                        if (nextHandleCandidate && nextHandleCandidate.polarity === 'positive') {
+                                            nextBatteryInSeriesFound = nextBattCandidate; break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        currentBatteryInString = nextBatteryInSeriesFound;
+                    }
+                    if (currentString.length > 0) {
+                        seriesStrings.push(currentString);
+                        currentString.forEach(b => visitedBatteries.add(b.id)); 
+                    }
+                }
+            }
+            currentBatteries.forEach(batt => {
+                if (!visitedBatteries.has(batt.id)) { seriesStrings.push([batt]); }
+            });
+            let totalVoltage = 0, totalAh = 0, totalKWh = 0, totalMaxCurrent = 0;
+            let configType = "N/A";
+            if (seriesStrings.length > 0) {
+                let stringDetails = [];
+                for (const string of seriesStrings) {
+                    if (string.length === 0) continue;
+                    let stringVoltage = 0;
+                    let stringAh = string[0].specs.ah;
+                    let stringMaxCurrent = string[0].specs.maxDischarge;
+                    for (const batt of string) {
+                        stringVoltage += batt.specs.voltage;
+                        stringAh = Math.min(stringAh, batt.specs.ah);
+                        stringMaxCurrent = Math.min(stringMaxCurrent, batt.specs.maxDischarge);
+                    }
+                    stringDetails.push({ 
+                        batteries: string, 
+                        voltage: stringVoltage, 
+                        ah: stringAh,
+                        maxCurrent: stringMaxCurrent 
+                    });
+                }
+                if (stringDetails.length > 0) {
+                    totalVoltage = stringDetails[0].voltage; 
+                    let voltageMismatch = false;
+                    for (const detail of stringDetails) {
+                        totalAh += detail.ah; 
+                        totalMaxCurrent += detail.maxCurrent; // Add max current for parallel strings
+                        if (stringDetails.length > 1 && Math.abs(detail.voltage - totalVoltage) > totalVoltage * 0.05) {
+                            voltageMismatch = true;
+                        }
+                    }
+                    totalKWh = (totalVoltage * totalAh) / 1000;
+                    const numStrings = stringDetails.length;
+                    if (numStrings === 1) {
+                        configType = `${stringDetails[0].batteries.length}-Series`;
+                    } else {
+                        const firstStringLength = stringDetails[0].batteries.length;
+                        const allSameLength = stringDetails.every(s => s.batteries.length === firstStringLength);
+                        configType = allSameLength ? 
+                            `${numStrings}-Parallel ${firstStringLength}-Series` : 
+                            `${numStrings}-Parallel (mixed Series)`;
+                    }
+                    if (voltageMismatch) configType += " (V Mismatch!)";
+                }
+            }
+            updateBatterySpecsDisplay(totalVoltage, totalAh, totalKWh, totalMaxCurrent, configType);
+        }
+
+        function updateBatterySpecsDisplay(voltage, ah, kwh, maxCurrent, config) {
+            d3.select("#total-batt-voltage").text(parseFloat(voltage || 0).toFixed(1));
+            d3.select("#total-batt-ah").text(parseFloat(ah || 0).toFixed(1));
+            d3.select("#total-batt-kwh").text(parseFloat(kwh || 0).toFixed(2));
+            
+            // Check if this is an all-in-one controller
+            const controller = allItems.find(item => item.id === CONTROLLER_ID);
+            if (controller && controller.subtype === 'all_in_one') {
+                d3.select("#total-batt-max-current").text("Internal Battery");
+                d3.select("#max-current-unit").text("");
+            } else {
+                d3.select("#total-batt-max-current").text(parseFloat(maxCurrent || 0).toFixed(1));
+                d3.select("#max-current-unit").text("A");
+            }
+            
+            d3.select("#batt-config-type").text(config);
+        }
+
+        window.addEventListener('resize', () => { updateSvgDimensions(); render(); });
+        document.addEventListener('DOMContentLoaded', () => {
+            updateSvgDimensions();
+            populateControllerLibrary();
+            populatePanelLibrary();
+            populateBatteryLibrary();
+            render();
+        });
+
+        function deleteItem(item) {
+            console.log("Deleting item:", item.id);
+            
+            // Remove all connections involving this item
+            const connectionsToRemove = connections.filter(conn => 
+                conn.sourceItemId === item.id || conn.targetItemId === item.id
+            );
+            
+            // Immediately remove the connection lines from the SVG
+            connectionsToRemove.forEach(conn => {
+                svg.selectAll(".wire")
+                    .filter(d => d.id === conn.id)
+                    .remove();
+            });
+            
+            // Remove connections from the other items' handles
+            connectionsToRemove.forEach(conn => {
+                const otherItemId = conn.sourceItemId === item.id ? conn.targetItemId : conn.sourceItemId;
+                const otherItem = allItems.find(i => i.id === otherItemId);
+                if (otherItem) {
+                    Object.values(otherItem.handles).forEach(handle => {
+                        handle.connectedTo = handle.connectedTo.filter(c => c.connectionId !== conn.id);
+                    });
+                }
+            });
+
+            // Remove the connections from the connections array
+            connections = connections.filter(conn => 
+                conn.sourceItemId !== item.id && conn.targetItemId !== item.id
+            );
+
+            // Remove the item
+            allItems = allItems.filter(i => i.id !== item.id);
+
+            // If it was the controller, update the UI
+            if (item.id === CONTROLLER_ID) {
+                d3.select("#removeControllerBtn").style("display", "none");
+            }
+
+            // Clear selection if the deleted item was selected
+            if (selectedItem && selectedItem.id === item.id) {
+                selectItem(null);
+            }
+
+            // Update specs and validation after deleting item
+            calculateTotalSpecs();
+            calculateBatteryBankSpecs();
+            
+            // Update total cost display
+            d3.select("#total-system-cost").text(`$${calculateTotalSystemCost()}`);
+            
+            // Force a complete re-render to ensure all connections are redrawn
+            render();
+        }
+
+        // Add event listener for controller type change
+        d3.select("#ctrl-type").on("change", function() {
+            const type = this.value;
+            d3.select("#hybrid-inverter-fields").style("display", type === 'hybrid_inverter' ? 'block' : 'none');
+            d3.select("#all-in-one-fields").style("display", type === 'all_in_one' ? 'block' : 'none');
+            d3.select(".voltage-compatibility").style("display", type === 'all_in_one' ? 'none' : 'block');
+        });
+
+        // --- UI Event Handlers ---
+        d3.select("#enableSnapping").on("change", function() {
+            isSnappingEnabled = this.checked;
+        });
+
+        function addOrUpdateControllerFromInputs() {
+            const supportedVoltages = Array.from(d3.selectAll(".voltage-checkbox:checked")).map(cb => parseInt(cb.value));
+            const controllerType = d3.select("#ctrl-type").node().value;
+            
+            const ctrlSpecs = {
+                type: controllerType,
+                maxVoc: parseFloat(d3.select("#ctrl-max-voc").node().value) || 150,
+                maxIsc: parseFloat(d3.select("#ctrl-max-isc").node().value) || 30,
+                maxWmp: parseFloat(d3.select("#ctrl-max-wmp").node().value) || 4000,
+                ratedChargeCurrent: parseFloat(d3.select("#ctrl-rated-charge-current").node().value) || 20,
+                supportedVoltages: supportedVoltages,
+                cost: parseFloat(d3.select("#ctrl-cost").node().value) || 0
+            };
+
+            // Add type-specific properties
+            if (controllerType === 'hybrid_inverter' || controllerType === 'all_in_one') {
+                ctrlSpecs.maxACOutputW = parseFloat(d3.select("#ctrl-max-ac-output-w").node().value) || 0;
+                ctrlSpecs.maxACOutputA = parseFloat(d3.select("#ctrl-max-ac-output-a").node().value) || 0;
+            }
+            if (controllerType === 'hybrid_inverter') {
+                ctrlSpecs.maxDCAmps = parseFloat(d3.select("#ctrl-max-dc-amps").node().value) || 0;
+            }
+            if (controllerType === 'all_in_one') {
+                ctrlSpecs.internalBatteryKWh = parseFloat(d3.select("#ctrl-internal-battery-kwh").node().value) || 0;
+                ctrlSpecs.internalBatteryVoltage = parseFloat(d3.select("#ctrl-internal-battery-voltage").node().value) || 48;
+            }
+            
+            let controller = allItems.find(item => item.id === CONTROLLER_ID);
+            if (!controller) {
+                const yOffset = allItems.length > 0 ? controllerBaseHeight + 40 : svgHeight - (controllerBaseHeight + 20) - 30;
+                controller = createChargeController(svgWidth / 2 - controllerWidth / 2, yOffset, ctrlSpecs);
+                allItems.push(controller);
+            } else {
+                controller.specs = ctrlSpecs;
+                controller.subtype = controllerType;
+            }
+            d3.select("#removeControllerBtn").style("display", "inline-block");
+            render();
+        }
+
+        function calculateGridPosition(type) {
+            const items = allItems.filter(item => item.type === type);
+            if (items.length === 0) {
+                // First item placement
+                return {
+                    x: 30,
+                    y: type === 'panel' ? 30 : svgHeight - panelHeight - 30
+                };
+            }
+
+            // Find the rightmost item
+            const rightmostItem = items.reduce((rightmost, current) => {
+                return (current.x > rightmost.x) ? current : rightmost;
+            }, items[0]);
+
+            // Calculate new position
+            let newX = rightmostItem.x + panelWidth + 20; // 20px gap between items
+            let newY = rightmostItem.y;
+
+            // If new position would go off screen, move to next row
+            if (newX + panelWidth > svgWidth - 30) {
+                newX = 30;
+                newY = rightmostItem.y + panelHeight + 50; // 50px gap between rows
+            }
+
+            // Ensure the new position doesn't go off screen vertically
+            if (newY + panelHeight > svgHeight - 30) {
+                newY = type === 'panel' ? 30 : svgHeight - panelHeight - 30;
+            }
+
+            return { x: newX, y: newY };
+        }
+
+        d3.select("#addPanelBtn").on("click", () => {
+            const panelSpecs = {
+                name: d3.select("#panel-name").node().value || "Custom Panel",
+                wmp: parseFloat(d3.select("#wmp").node().value) || 0,
+                vmp: parseFloat(d3.select("#vmp").node().value) || 0,
+                voc: parseFloat(d3.select("#voc").node().value) || 0,
+                isc: parseFloat(d3.select("#isc").node().value) || 0,
+                imp: parseFloat(d3.select("#imp").node().value) || 0,
+                cost: parseFloat(d3.select("#panel-cost").node().value) || 0
+            };
+            // Calculate imp from wmp and vmp if not provided
+            if (!panelSpecs.imp && panelSpecs.wmp && panelSpecs.vmp) {
+                panelSpecs.imp = parseFloat((panelSpecs.wmp / panelSpecs.vmp).toFixed(2));
+            }
+            const position = calculateGridPosition('panel');
+            const newPanel = createPanel(position.x, position.y, panelSpecs);
+            allItems.push(newPanel);
+            // Update total cost display immediately after adding panel
+            d3.select("#total-system-cost").text(`$${calculateTotalSystemCost()}`);
+            render();
+        });
+
+        d3.select("#addBatteryBtn").on("click", () => {
+            const batterySpecs = {
+                name: d3.select("#batt-name").node().value || "Custom Battery",
+                voltage: parseFloat(d3.select("#batt-voltage").node().value) || 12,
+                ah: parseFloat(d3.select("#batt-ah").node().value) || 100,
+                maxDischarge: parseFloat(d3.select("#batt-max-discharge").node().value) || 100,
+                cost: parseFloat(d3.select("#batt-cost").node().value) || 0
+            };
+            const position = calculateGridPosition('battery');
+            const newBattery = createBattery(position.x, position.y, batterySpecs);
+            allItems.push(newBattery);
+            // Update total cost display immediately after adding battery
+            d3.select("#total-system-cost").text(`$${calculateTotalSystemCost()}`);
+            render();
+        });
+
+        d3.select("#addControllerBtn").on("click", () => {
+            addOrUpdateControllerFromInputs();
+            // Update total cost display immediately after adding/updating controller
+            d3.select("#total-system-cost").text(`$${calculateTotalSystemCost()}`);
+        });
+
+        d3.select("#removeControllerBtn").on("click", destroyController);
+
+        ["#ctrl-max-voc", "#ctrl-max-isc", "#ctrl-max-wmp"].forEach(selector => {
+            d3.select(selector).on("input", function() {
+                const controller = allItems.find(item => item.id === CONTROLLER_ID);
+                if (controller) {
+                    controller.specs.maxVoc = parseFloat(d3.select("#ctrl-max-voc").node().value) || 0;
+                    controller.specs.maxIsc = parseFloat(d3.select("#ctrl-max-isc").node().value) || 0;
+                    controller.specs.maxWmp = parseFloat(d3.select("#ctrl-max-wmp").node().value) || 0;
+                    if (d3.select("#ctrl-rated-charge-current").node()) {
+                        controller.specs.ratedChargeCurrent = parseFloat(d3.select("#ctrl-rated-charge-current").node().value) || controller.specs.maxIsc;
+                    } else {
+                        controller.specs.ratedChargeCurrent = controller.specs.maxIsc;
+                    }
+                    render();
+                }
+            });
+        });
+
+        d3.select("#clearAllBtn").on("click", () => {
+            const controller = allItems.find(item => item.id === CONTROLLER_ID);
+            allItems = controller ? [controller] : [];
+            connections = [];
+            panelIdCounter = 0;
+            batteryIdCounter = 0;
+            allItems.forEach(item => {
+                if (item.handles) {
+                    Object.values(item.handles).forEach(h => {
+                        h.connectedTo = [];
+                    });
+                }
+            });
+            render();
+        });
+
+        // --- Animation and Destruction ---
+        function animateSparks(flamesGroup, controllerData) {
+            if (flamesGroup.empty() || !controllerData) return;
+            flamesGroup.selectAll(".spark-line")
+                .each(function() {
+                    let x1, y1, baseAngle;
+                    const edge = Math.floor(Math.random() * 4);
+                    const margin = 2;
+                    const itemWidth = controllerData.width;
+                    const itemHeight = controllerData.height;
+                    switch (edge) {
+                        case 0: x1 = Math.random() * (itemWidth - 2 * margin) + margin; y1 = margin; baseAngle = -Math.PI / 2 - (Math.PI/4 * (Math.random() - 0.5)); break;
+                        case 1: x1 = itemWidth - margin; y1 = Math.random() * (itemHeight - 2 * margin) + margin; baseAngle = 0 - (Math.PI/4 * (Math.random() - 0.5)); break;
+                        case 2: x1 = Math.random() * (itemWidth - 2 * margin) + margin; y1 = itemHeight - margin; baseAngle = Math.PI / 2 - (Math.PI/4 * (Math.random() - 0.5)); break;
+                        default: x1 = margin; y1 = Math.random() * (itemHeight - 2 * margin) + margin; baseAngle = Math.PI - (Math.PI/4 * (Math.random() - 0.5)); break;
+                    }
+                    const length = 8 + Math.random() * 15;
+                    const angleSpread = Math.PI / 3;
+                    const angle = baseAngle + (Math.random() - 0.5) * angleSpread;
+                    const x2 = x1 + length * Math.cos(angle);
+                    const y2 = y1 + length * Math.sin(angle);
+                    const sparkColors = ["#FF0000", "#FF4500", "#FFA500", "#FFD700"];
+                    d3.select(this)
+                        .attr("x1", x1).attr("y1", y1)
+                        .attr("x2", x2).attr("y2", y2)
+                        .style("stroke", sparkColors[Math.floor(Math.random() * sparkColors.length)])
+                        .style("stroke-width", 1.5 + Math.random() * 2);
+                });
+        }
+
+        function destroyController() {
+            console.log("Controller self-destructing!");
+            if (overloadAnimationTimer) {
+                overloadAnimationTimer.stop();
+                overloadAnimationTimer = null;
+            }
+            if (selfDestructTimeout) {
+                clearTimeout(selfDestructTimeout);
+                selfDestructTimeout = null;
+            }
+            const controller = allItems.find(item => item.id === CONTROLLER_ID);
+            if (controller) {
+                const controllerConnections = connections.filter(conn => conn.sourceItemId === CONTROLLER_ID || conn.targetItemId === CONTROLLER_ID);
+                controllerConnections.forEach(conn => {
+                    const otherItemId = conn.sourceItemId === CONTROLLER_ID ? conn.targetItemId : conn.sourceItemId;
+                    const otherItem = allItems.find(i => i.id === otherItemId);
+                    if (otherItem && otherItem.handles) {
+                        const otherHandleId = conn.sourceItemId === CONTROLLER_ID ? conn.targetHandleId : conn.sourceHandleId;
+                        const otherHandle = Object.values(otherItem.handles).find(h => h.id === otherHandleId);
+                        if (otherHandle && Array.isArray(otherHandle.connectedTo)) {
+                            otherHandle.connectedTo = otherHandle.connectedTo.filter(c => c.connectionId !== conn.id);
+                        }
+                    }
+                });
+                connections = connections.filter(conn => conn.sourceItemId !== CONTROLLER_ID && conn.targetItemId !== CONTROLLER_ID);
+            }
+            allItems = allItems.filter(item => item.id !== CONTROLLER_ID);
+            d3.select("#removeControllerBtn").style("display", "none");
+            const statusDiv = d3.select("#status-messages");
+            statusDiv.html(`<p class="status-exceeds">CONTROLLER DESTROYED DUE TO OVERLOAD!</p>`);
+            render();
+        }
+
+        let selectedItem = null;
+
+        function selectItem(item) {
+            // Deselect previous item
+            if (selectedItem) {
+                d3.select(`.item-group[data-id="${selectedItem.id}"]`).classed("selected", false);
+            }
+            
+            // Select new item
+            selectedItem = item;
+            if (item) {
+                d3.select(`.item-group[data-id="${item.id}"]`).classed("selected", true);
+                showInspector(item);
+            } else {
+                hideInspector();
+            }
+        }
+
+        function showInspector(item) {
+            const inspectorPanel = d3.select("#inspector-panel");
+            const inspectorContent = d3.select("#inspector-content");
+            inspectorContent.html(""); // Clear previous content
+
+            // Create inspector content based on item type
+            if (item.type === 'panel') {
+                inspectorContent.append("h4").text("Solar Panel Specs");
+                inspectorContent.append("label")
+                    .text("Wmp: ")
+                    .append("input")
+                    .attr("type", "number")
+                    .attr("value", item.specs.wmp)
+                    .on("change", function() {
+                        item.specs.wmp = parseFloat(this.value) || 0;
+                        // Recalculate imp when wmp changes
+                        if (item.specs.vmp) {
+                            item.specs.imp = parseFloat((item.specs.wmp / item.specs.vmp).toFixed(2));
+                        }
+                        render();
+                    });
+                inspectorContent.append("label")
+                    .text("Vmp: ")
+                    .append("input")
+                    .attr("type", "number")
+                    .attr("value", item.specs.vmp)
+                    .on("change", function() {
+                        item.specs.vmp = parseFloat(this.value) || 0;
+                        // Recalculate imp when vmp changes
+                        if (item.specs.wmp) {
+                            item.specs.imp = parseFloat((item.specs.wmp / item.specs.vmp).toFixed(2));
+                        }
+                        render();
+                    });
+                inspectorContent.append("label")
+                    .text("Voc: ")
+                    .append("input")
+                    .attr("type", "number")
+                    .attr("value", item.specs.voc)
+                    .on("change", function() {
+                        item.specs.voc = parseFloat(this.value) || 0;
+                        render();
+                    });
+                inspectorContent.append("label")
+                    .text("Isc: ")
+                    .append("input")
+                    .attr("type", "number")
+                    .attr("value", item.specs.isc)
+                    .on("change", function() {
+                        item.specs.isc = parseFloat(this.value) || 0;
+                        render();
+                    });
+                inspectorContent.append("label")
+                    .text("Imp: ")
+                    .append("input")
+                    .attr("type", "number")
+                    .attr("value", item.specs.imp || (item.specs.wmp / item.specs.vmp))
+                    .on("change", function() {
+                        item.specs.imp = parseFloat(this.value) || 0;
+                        render();
+                    });
+                inspectorContent.append("label")
+                    .text("Cost: $")
+                    .append("input")
+                    .attr("type", "number")
+                    .attr("value", item.specs.cost || 0)
+                    .on("change", function() {
+                        item.specs.cost = parseFloat(this.value) || 0;
+                        calculateTotalSpecs();
+                        render();
+                    });
+            } else if (item.type === 'battery') {
+                inspectorContent.append("h4").text("Battery Specs");
+                inspectorContent.append("label")
+                    .text("Voltage: ")
+                    .append("input")
+                    .attr("type", "number")
+                    .attr("value", item.specs.voltage)
+                    .on("change", function() {
+                        item.specs.voltage = parseFloat(this.value) || 0;
+                        item.specs.kWh = (item.specs.voltage * item.specs.ah) / 1000;
+                        render();
+                    });
+                inspectorContent.append("label")
+                    .text("Ah: ")
+                    .append("input")
+                    .attr("type", "number")
+                    .attr("value", item.specs.ah)
+                    .on("change", function() {
+                        item.specs.ah = parseFloat(this.value) || 0;
+                        item.specs.kWh = (item.specs.voltage * item.specs.ah) / 1000;
+                        render();
+                    });
+                inspectorContent.append("label")
+                    .text("Max Discharge: ")
+                    .append("input")
+                    .attr("type", "number")
+                    .attr("value", item.specs.maxDischarge)
+                    .on("change", function() {
+                        item.specs.maxDischarge = parseFloat(this.value) || 0;
+                        render();
+                    });
+                inspectorContent.append("label")
+                    .text("Cost: $")
+                    .append("input")
+                    .attr("type", "number")
+                    .attr("value", item.specs.cost || 0)
+                    .on("change", function() {
+                        item.specs.cost = parseFloat(this.value) || 0;
+                        calculateTotalSpecs();
+                        render();
+                    });
+            } else if (item.type === 'controller') {
+                inspectorContent.append("h4").text("Controller Specs");
+                inspectorContent.append("label")
+                    .text("Controller Type: ")
+                    .append("select")
+                    .attr("value", item.subtype)
+                    .on("change", function() {
+                        item.subtype = this.value;
+                        render();
+                    })
+                    .selectAll("option")
+                    .data(["charge_controller", "hybrid_inverter", "all_in_one"])
+                    .enter()
+                    .append("option")
+                    .attr("value", d => d)
+                    .text(d => d.split("_").map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(" "));
+
+                inspectorContent.append("label")
+                    .text("Max PV Voc: ")
+                    .append("input")
+                    .attr("type", "number")
+                    .attr("value", item.specs.maxVoc)
+                    .on("change", function() {
+                        item.specs.maxVoc = parseFloat(this.value) || 0;
+                        render();
+                    });
+                inspectorContent.append("label")
+                    .text("Max PV Isc: ")
+                    .append("input")
+                    .attr("type", "number")
+                    .attr("value", item.specs.maxIsc)
+                    .on("change", function() {
+                        item.specs.maxIsc = parseFloat(this.value) || 0;
+                        render();
+                    });
+                inspectorContent.append("label")
+                    .text("Max PV Wmp: ")
+                    .append("input")
+                    .attr("type", "number")
+                    .attr("value", item.specs.maxWmp)
+                    .on("change", function() {
+                        item.specs.maxWmp = parseFloat(this.value) || 0;
+                        render();
+                    });
+                inspectorContent.append("label")
+                    .text("Rated Charge Current: ")
+                    .append("input")
+                    .attr("type", "number")
+                    .attr("value", item.specs.ratedChargeCurrent)
+                    .on("change", function() {
+                        item.specs.ratedChargeCurrent = parseFloat(this.value) || 0;
+                        render();
+                    });
+
+                if (item.subtype === 'hybrid_inverter' || item.subtype === 'all_in_one') {
+                    inspectorContent.append("label")
+                        .text("Max AC Output W: ")
+                        .append("input")
+                        .attr("type", "number")
+                        .attr("value", item.specs.maxACOutputW)
+                        .on("change", function() {
+                            item.specs.maxACOutputW = parseFloat(this.value) || 0;
+                            render();
+                        });
+                    inspectorContent.append("label")
+                        .text("Max AC Output A: ")
+                        .append("input")
+                        .attr("type", "number")
+                        .attr("value", item.specs.maxACOutputA)
+                        .on("change", function() {
+                            item.specs.maxACOutputA = parseFloat(this.value) || 0;
+                            render();
+                        });
+                }
+                if (item.subtype === 'hybrid_inverter') {
+                    inspectorContent.append("label")
+                        .text("Max DC Amps: ")
+                        .append("input")
+                        .attr("type", "number")
+                        .attr("value", item.specs.maxDCAmps)
+                        .on("change", function() {
+                            item.specs.maxDCAmps = parseFloat(this.value) || 0;
+                            render();
+                        });
+                }
+                if (item.subtype === 'all_in_one') {
+                    inspectorContent.append("label")
+                        .text("Internal Battery kWh: ")
+                        .append("input")
+                        .attr("type", "number")
+                        .attr("value", item.specs.internalBatteryKWh)
+                        .on("change", function() {
+                            item.specs.internalBatteryKWh = parseFloat(this.value) || 0;
+                            render();
+                        });
+                    inspectorContent.append("label")
+                        .text("Internal Battery Voltage: ")
+                        .append("input")
+                        .attr("type", "number")
+                        .attr("value", item.specs.internalBatteryVoltage)
+                        .on("change", function() {
+                            item.specs.internalBatteryVoltage = parseFloat(this.value) || 0;
+                            render();
+                        });
+                }
+                inspectorContent.append("label")
+                    .text("Cost: $")
+                    .append("input")
+                    .attr("type", "number")
+                    .attr("value", item.specs.cost || 0)
+                    .on("change", function() {
+                        item.specs.cost = parseFloat(this.value) || 0;
+                        calculateTotalSpecs();
+                        render();
+                    });
+            }
+
+            inspectorPanel.classed("visible", true);
+        }
+
+        function hideInspector() {
+            const inspectorPanel = d3.select("#inspector-panel");
+            inspectorPanel.classed("visible", false);
+        }
+
+        // Save/Load System Functions
+        function saveSystem() {
+            const systemState = {
+                version: "1.0",
+                timestamp: new Date().toISOString(),
+                items: allItems.map(item => ({
+                    ...item,
+                    handles: Object.fromEntries(
+                        Object.entries(item.handles).map(([key, handle]) => [
+                            key,
+                            {
+                                ...handle,
+                                connectedTo: handle.connectedTo.map(conn => ({
+                                    itemId: conn.itemId,
+                                    handleId: conn.handleId,
+                                    connectionId: conn.connectionId
+                                }))
+                            }
+                        ])
+                    )
+                })),
+                connections: connections.map(conn => ({
+                    id: conn.id,
+                    sourceItemId: conn.sourceItemId,
+                    sourceHandleId: conn.sourceHandleId,
+                    targetItemId: conn.targetItemId,
+                    targetHandleId: conn.targetHandleId
+                })),
+                counters: {
+                    panelIdCounter,
+                    batteryIdCounter,
+                    connectionIdCounter
+                }
+            };
+
+            const blob = new Blob([JSON.stringify(systemState, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `solar_system_${new Date().toISOString().slice(0,10)}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function loadSystem(file) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const systemState = JSON.parse(e.target.result);
+                    
+                    // Validate version
+                    if (!systemState.version) {
+                        throw new Error("Invalid system file: missing version");
+                    }
+
+                    // Clear current system
+                    allItems = [];
+                    connections = [];
+                    
+                    // Restore counters
+                    panelIdCounter = systemState.counters.panelIdCounter;
+                    batteryIdCounter = systemState.counters.batteryIdCounter;
+                    connectionIdCounter = systemState.counters.connectionIdCounter;
+
+                    // Restore items
+                    allItems = systemState.items;
+
+                    // Restore connections
+                    connections = systemState.connections;
+
+                    // Update UI
+                    render();
+                    calculateTotalSpecs();
+                    calculateBatteryBankSpecs();
+                } catch (error) {
+                    alert("Error loading system: " + error.message);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function exportSelectedComponent() {
+            if (!selectedItem) {
+                alert("Please select a component to export");
+                return;
+            }
+
+            const componentData = {
+                version: "1.0",
+                type: selectedItem.type,
+                specs: selectedItem.specs,
+                timestamp: new Date().toISOString()
+            };
+
+            const blob = new Blob([JSON.stringify(componentData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${selectedItem.type}_${selectedItem.id}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function importComponent(file) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const componentData = JSON.parse(e.target.result);
+                    
+                    // Validate version and type
+                    if (!componentData.version || !componentData.type) {
+                        throw new Error("Invalid component file: missing version or type");
+                    }
+
+                    let newItem;
+                    const position = calculateGridPosition(componentData.type);
+
+                    switch (componentData.type) {
+                        case 'panel':
+                            newItem = createPanel(position.x, position.y, componentData.specs);
+                            break;
+                        case 'battery':
+                            newItem = createBattery(position.x, position.y, componentData.specs);
+                            break;
+                        case 'controller':
+                            newItem = createChargeController(position.x, position.y, componentData.specs);
+                            break;
+                        default:
+                            throw new Error("Unknown component type: " + componentData.type);
+                    }
+
+                    allItems.push(newItem);
+                    render();
+                    calculateTotalSpecs();
+                    calculateBatteryBankSpecs();
+                } catch (error) {
+                    alert("Error importing component: " + error.message);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        // Add event listeners for save/load buttons
+        d3.select("#saveSystemBtn").on("click", saveSystem);
+        d3.select("#loadSystemBtn").on("click", () => {
+            document.getElementById("fileInput").click();
+        });
+        d3.select("#exportComponentBtn").on("click", exportSelectedComponent);
+        d3.select("#importComponentBtn").on("click", () => {
+            document.getElementById("fileInput").click();
+        });
+
+        // Handle file input
+        document.getElementById("fileInput").addEventListener("change", function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            // Determine if this is a system or component file
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    if (data.items && data.connections) {
+                        loadSystem(file);
+                    } else {
+                        importComponent(file);
+                    }
+                } catch (error) {
+                    alert("Error reading file: " + error.message);
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        // Add export config functionality
+        function exportConfig() {
+            // Get the system specs values
+            const maxArrayCapacity = parseFloat(d3.select("#max-array-capacity").text()) || 0;
+            const batteryCapacity = parseFloat(d3.select("#battery-capacity").text()) || 0;
+
+            // Create nodes array with solar array and battery bank
+            const nodes = [
+                {
+                    id: "node-1",
+                    type: "solar-array",
+                    x: 100,
+                    y: 100,
+                    width: 200,
+                    height: 300,
+                    label: "SOLAR ARRAY",
+                    ratedOutput: maxArrayCapacity, // Value is already in correct unit
+                    currentOutput: 0,
+                    ports: [
+                        {
+                            id: "p-1-out-power",
+                            type: "output",
+                            resourceType: "Power",
+                            name: "Power Out",
+                            side: "right",
+                            yOffsetRatio: 0.5
+                        }
+                    ]
+                },
+                {
+                    id: "node-2",
+                    type: "resource-display",
+                    x: 400,
+                    y: 100,
+                    width: 200,
+                    height: 280,
+                    label: "BATTERY BANK",
+                    resourceType: "Power",
+                    unit: "kWh",
+                    value: 0,
+                    maxCapacity: batteryCapacity,
+                    ports: [
+                        {
+                            id: "p-2-in-power",
+                            type: "input",
+                            resourceType: "Power",
+                            name: "Charge In",
+                            side: "left",
+                            yOffsetRatio: 0.5
+                        },
+                        {
+                            id: "p-2-out-power",
+                            type: "output",
+                            resourceType: "Power",
+                            name: "Power Out",
+                            side: "right",
+                            yOffsetRatio: 0.5
+                        }
+                    ]
+                }
+            ];
+
+            // Create connection between solar array and battery bank
+            const connections = [
+                {
+                    id: "conn-1",
+                    sourceNodeId: "node-1",
+                    sourcePortId: "p-1-out-power",
+                    targetNodeId: "node-2",
+                    targetPortId: "p-2-in-power"
+                }
+            ];
+
+            // Create the system state object
+            const systemState = {
+                nodes: nodes,
+                connections: connections,
+                elapsedHours: 0,
+                nodeIdCounter: 2,
+                connectionIdCounter: 1
+            };
+
+            // Create and download the JSON file
+            const saveData = JSON.stringify(systemState, null, 2);
+            const blob = new Blob([saveData], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `solar_system_config_${new Date().toISOString().slice(0,10)}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        // Add event listener for the export config button
+        d3.select("#exportConfigBtn").on("click", exportConfig);
+
+        // Add function to calculate total system cost
+        function calculateTotalSystemCost() {
+            let totalCost = 0;
+            
+            // Sum up costs from all components on the canvas
+            allItems.forEach(item => {
+                if (item.specs && typeof item.specs.cost === 'number') {
+                    totalCost += item.specs.cost;
+                }
+            });
+            
+            // Format the cost with commas for thousands
+            return totalCost.toLocaleString('en-US', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            });
+        }
+    </script>
+</body>
+</html>
